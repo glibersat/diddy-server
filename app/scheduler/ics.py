@@ -1,0 +1,118 @@
+"""Criterion #2: reminders N minutes before events in a personal ICS export."""
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, UTC
+
+import httpx
+from dateutil.rrule import rrulestr
+from icalendar import Calendar
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models import IcsSource, Notification, RuleType
+
+LOOKAHEAD_BUFFER_MINUTES = 60  # extra margin past the largest offset, to tolerate slow/late ticks
+
+
+@dataclass
+class Occurrence:
+    uid: str
+    summary: str
+    start: datetime
+
+
+def fetch_ics_text(url_or_path: str) -> str:
+    if url_or_path.startswith("http://") or url_or_path.startswith("https://"):
+        response = httpx.get(url_or_path, timeout=10, follow_redirects=True)
+        response.raise_for_status()
+        return response.text
+    with open(url_or_path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _as_datetime(value: date | datetime) -> datetime | None:
+    """ICS all-day events (date, no time) can't support a "minutes before" offset; skip them."""
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def expand_occurrences(ics_text: str, window_start: datetime, window_end: datetime) -> list[Occurrence]:
+    calendar = Calendar.from_ical(ics_text)
+    occurrences: list[Occurrence] = []
+    for component in calendar.walk("VEVENT"):
+        uid = str(component.get("UID"))
+        summary = str(component.get("SUMMARY", "Event"))
+        dtstart = _as_datetime(component.get("DTSTART").dt)
+        if dtstart is None:
+            continue
+
+        rrule = component.get("RRULE")
+        if rrule is None:
+            if window_start <= dtstart <= window_end:
+                occurrences.append(Occurrence(uid, summary, dtstart))
+            continue
+
+        rule = rrulestr(rrule.to_ical().decode(), dtstart=dtstart)
+        for start in rule.between(window_start, window_end, inc=True):
+            occurrences.append(Occurrence(uid, summary, start))
+    return occurrences
+
+
+def compute_due(
+    occurrences: list[Occurrence], offsets_minutes: list[int], now: datetime
+) -> list[tuple[Occurrence, int]]:
+    """An occurrence+offset is "due" once its trigger time has passed but the event hasn't started."""
+    due = []
+    for occurrence in occurrences:
+        for offset in offsets_minutes:
+            trigger = occurrence.start - timedelta(minutes=offset)
+            if trigger <= now < occurrence.start:
+                due.append((occurrence, offset))
+    return due
+
+
+def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = None) -> int:
+    now = now or datetime.now(UTC)
+    lookahead = timedelta(minutes=max(source.offsets_minutes, default=0) + LOOKAHEAD_BUFFER_MINUTES)
+    ics_text = fetch_ics_text(source.url_or_path)
+    occurrences = expand_occurrences(ics_text, now - timedelta(minutes=5), now + lookahead)
+
+    created = 0
+    for occurrence, offset in compute_due(occurrences, source.offsets_minutes, now):
+        dedupe_key = f"ics:{source.id}:{occurrence.uid}:{occurrence.start.isoformat()}:{offset}"
+        notification = Notification(
+            user_id=source.user_id,
+            rule_type=RuleType.ics_reminder,
+            rule_id=source.id,
+            dedupe_key=dedupe_key,
+            scheduled_for=now,
+            title=f"In {offset} min: {occurrence.summary}",
+            body=f"{occurrence.summary} starts at {occurrence.start.strftime('%H:%M')}",
+            kind=source.kind,
+            dismissible=source.dismissible,
+            snooze_minutes=source.snooze_minutes,
+        )
+        db.add(notification)
+        try:
+            db.commit()
+            created += 1
+        except IntegrityError:
+            db.rollback()  # already reminded for this event+offset
+
+    source.last_synced_at = now
+    db.commit()
+    return created
+
+
+def run_all_ics_ticks(db: Session, now: datetime | None = None) -> int:
+    now = now or datetime.now(UTC)
+    total = 0
+    for source in db.query(IcsSource).filter(IcsSource.enabled.is_(True)).all():
+        last_synced_at = _as_datetime(source.last_synced_at) if source.last_synced_at else None
+        due_for_refresh = (
+            last_synced_at is None or now - last_synced_at >= timedelta(minutes=source.refresh_minutes)
+        )
+        if due_for_refresh:
+            total += run_ics_source_tick(db, source, now)
+    return total

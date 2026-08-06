@@ -1,0 +1,134 @@
+import secrets
+import uuid
+from datetime import datetime, UTC
+from enum import Enum
+
+from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import Base
+
+
+def _uuid() -> str:
+    return uuid.uuid4().hex
+
+
+def _api_key() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class ReminderKind(str, Enum):
+    """Matches InfiniTime's ReminderService `kind` byte (icon/accent only)."""
+
+    generic = "generic"
+    medication = "medication"
+    appointment = "appointment"
+
+
+class NotificationStatus(str, Enum):
+    pending = "pending"  # queued, not yet sent over the companion WebSocket
+    sent = "sent"  # delivered to the phone, awaiting an ack (or resend after timeout)
+    acked = "acked"  # wearer snoozed or dismissed it on-watch
+    failed = "failed"  # no connected device, or gave up after max_send_attempts
+
+
+class RuleType(str, Enum):
+    daily_schedule = "daily_schedule"
+    ics_reminder = "ics_reminder"
+
+
+class AckAction(str, Enum):
+    snoozed = "snoozed"
+    dismissed = "dismissed"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)
+    api_key: Mapped[str] = mapped_column(String, unique=True, index=True, default=_api_key)
+    timezone: Mapped[str] = mapped_column(String, default="UTC")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
+class DailySchedule(Base):
+    """Criterion #1: fire `message` every day at `time_of_day` (user's timezone)."""
+
+    __tablename__ = "daily_schedules"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    time_of_day: Mapped[str] = mapped_column(String)  # "HH:MM", 24h, user's local tz
+    weekdays_mask: Mapped[int] = mapped_column(default=0b1111111)  # bit 0 = Monday ... bit 6 = Sunday
+    message: Mapped[str] = mapped_column(String)
+    enabled: Mapped[bool] = mapped_column(default=True)
+
+    kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.medication)
+    dismissible: Mapped[bool] = mapped_column(default=False)
+    snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=lambda: [5, 15])
+
+    user: Mapped["User"] = relationship(back_populates="daily_schedules")
+
+
+class IcsSource(Base):
+    """Criterion #2: parse an ICS feed and remind `offsets_minutes` before each event."""
+
+    __tablename__ = "ics_sources"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    url_or_path: Mapped[str] = mapped_column(String)
+    offsets_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
+    refresh_minutes: Mapped[int] = mapped_column(default=15)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.appointment)
+    dismissible: Mapped[bool] = mapped_column(default=True)
+    snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
+
+    user: Mapped["User"] = relationship(back_populates="ics_sources")
+
+
+class Notification(Base):
+    """Outbox/audit log. `rule_type` + `dedupe_key` is the seam future rule types plug into.
+
+    Delivery is fire-and-forget over a per-user WebSocket (companion app relays to the watch's
+    BLE ReminderService); the only proof the wearer saw it is an explicit snooze/dismiss `ack`,
+    so `status` tracks that instead of transport-level delivery.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_notification_dedupe_key"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    rule_type: Mapped[RuleType] = mapped_column(String)
+    rule_id: Mapped[str] = mapped_column(String)
+    dedupe_key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str] = mapped_column(String)
+    body: Mapped[str] = mapped_column(String)
+
+    kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.generic)
+    dismissible: Mapped[bool] = mapped_column(default=True)
+    snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
+
+    status: Mapped[NotificationStatus] = mapped_column(String, default=NotificationStatus.pending)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    send_attempts: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    ack_action: Mapped[AckAction | None] = mapped_column(String, nullable=True)
+    ack_snoozed_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
