@@ -62,6 +62,33 @@ export interface IcsSource {
 
 export type IcsSourceInput = Omit<IcsSource, 'id' | 'last_synced_at'>
 
+export type NotificationStatus = 'pending' | 'sent' | 'acked' | 'failed'
+export type AckAction = 'snoozed' | 'dismissed'
+
+export interface Notification {
+  id: string
+  rule_type: 'daily_schedule' | 'ics_reminder'
+  rule_id: string
+  scheduled_for: string
+  title: string
+  body: string
+  kind: ReminderKind
+  dismissible: boolean
+  snooze_minutes: number[]
+  status: NotificationStatus
+  sent_at: string | null
+  send_attempts: number
+  error: string | null
+  ack_action: AckAction | null
+  ack_snoozed_minutes: number | null
+  acked_at: string | null
+}
+
+export async function listNotifications(): Promise<Notification[]> {
+  const { data } = await client.get<Notification[]>('/notifications')
+  return data
+}
+
 export async function createUser(email: string, timezone: string): Promise<User> {
   const { data } = await client.post<User>('/users', { email, timezone })
   return data
