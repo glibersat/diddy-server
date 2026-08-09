@@ -102,7 +102,8 @@ the WebSocket. Deliberately minimal per an earlier decision — no signup/sessio
 ## Stack & layout
 
 FastAPI + SQLAlchemy 2.0 + SQLite + APScheduler, Python ≥3.11, dependencies in `pyproject.toml`
-(`pip install -e ".[dev]"`, venv at `.venv/`). Full layout and how to run/test: see `README.md`.
+managed with `uv` (`uv sync --extra dev`, venv at `.venv/`). Full layout and how to run/test:
+see `README.md`.
 
 ## What's not built yet
 

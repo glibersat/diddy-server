@@ -20,18 +20,18 @@ GenAI daily-summary job) plugs into without touching delivery.
 
 ## Running
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/):
+
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --extra dev
 cp .env.example .env  # adjust as needed
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 ## Testing
 
 ```bash
-. .venv/bin/activate
-pytest
+uv run pytest
 ```
 
 ## API
@@ -64,11 +64,11 @@ For anything beyond your own LAN, terminate TLS in front of uvicorn — the comp
 supports `wss://`/`https://` out of the box (`BackendClient.buildWebSocketUrl` in the
 Android app), but nothing here does TLS itself.
 
-1. On the target host, set up the venv and app as in **Running** above, but skip `--reload`.
-   Bind uvicorn to loopback only — it should never be reachable except through the proxy —
-   and run it detached, e.g. in a `screen`/`tmux` session or with `nohup`:
+1. On the target host, set up the app as in **Running** above (`uv sync --extra dev`), but
+   skip `--reload`. Bind uvicorn to loopback only — it should never be reachable except
+   through the proxy — and run it detached, e.g. in a `screen`/`tmux` session or with `nohup`:
    ```bash
-   nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 >> uvicorn.log 2>&1 &
+   nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 >> uvicorn.log 2>&1 &
    disown
    ```
    There's no process supervisor here, so a crash or reboot won't bring it back on its
