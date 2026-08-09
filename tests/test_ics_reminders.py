@@ -1,14 +1,21 @@
 from datetime import datetime, UTC
 from pathlib import Path
 
+import pytest
+
 from app.models import IcsSource, Notification
 from app.scheduler.ics import compute_due, expand_occurrences, fetch_ics_text, run_ics_source_tick
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.ics"
 
 
+def test_fetch_ics_text_rejects_local_paths():
+    with pytest.raises(ValueError):
+        fetch_ics_text(str(FIXTURE))
+
+
 def test_expand_occurrences_includes_single_and_recurring_events():
-    ics_text = fetch_ics_text(str(FIXTURE))
+    ics_text = FIXTURE.read_text()
     window_start = datetime(2024, 1, 3, 0, 0, tzinfo=UTC)
     window_end = datetime(2024, 1, 4, 0, 0, tzinfo=UTC)
 
@@ -20,7 +27,7 @@ def test_expand_occurrences_includes_single_and_recurring_events():
 
 
 def test_compute_due_only_after_trigger_and_before_start():
-    ics_text = fetch_ics_text(str(FIXTURE))
+    ics_text = FIXTURE.read_text()
     occurrences = expand_occurrences(
         ics_text, datetime(2024, 1, 3, 0, 0, tzinfo=UTC), datetime(2024, 1, 4, 0, 0, tzinfo=UTC)
     )
@@ -34,8 +41,14 @@ def test_compute_due_only_after_trigger_and_before_start():
     assert after_start == []  # event has started, no longer "due"
 
 
-def test_run_ics_source_tick_creates_and_dedupes_notifications(db_session, user):
-    source = IcsSource(user_id=user.id, url_or_path=str(FIXTURE), offsets_minutes=[30, 15], refresh_minutes=15)
+def test_run_ics_source_tick_creates_and_dedupes_notifications(db_session, user, monkeypatch):
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", lambda url_or_path: FIXTURE.read_text())
+    source = IcsSource(
+        user_id=user.id,
+        url_or_path="https://example.com/calendar.ics",
+        offsets_minutes=[30, 15],
+        refresh_minutes=15,
+    )
     db_session.add(source)
     db_session.commit()
 

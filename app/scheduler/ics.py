@@ -22,12 +22,14 @@ class Occurrence:
 
 
 def fetch_ics_text(url_or_path: str) -> str:
-    if url_or_path.startswith("http://") or url_or_path.startswith("https://"):
-        response = httpx.get(url_or_path, timeout=10, follow_redirects=True)
-        response.raise_for_status()
-        return response.text
-    with open(url_or_path, encoding="utf-8") as f:
-        return f.read()
+    """Despite the name, only remote http(s) URLs are supported - see
+    app/schemas.py::_validate_ics_url. A local-file fallback used to live here, but it let a
+    self-registered user make the server read arbitrary files off its own disk."""
+    if not (url_or_path.startswith("http://") or url_or_path.startswith("https://")):
+        raise ValueError(f"Unsupported ICS source (must be http:// or https://): {url_or_path!r}")
+    response = httpx.get(url_or_path, timeout=10, follow_redirects=True)
+    response.raise_for_status()
+    return response.text
 
 
 def _as_datetime(value: date | datetime) -> datetime | None:

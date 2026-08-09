@@ -1,13 +1,26 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import AckAction, NotificationStatus, ReminderKind, RuleType
 
 
+def _validate_ics_url(value: str) -> str:
+    """Reject anything but a remote http(s) URL - `fetch_ics_text` used to also accept a local
+    file path, which let a self-registered user make the server read arbitrary files off its own
+    disk (or hit internal-only URLs). See app/scheduler/ics.py::fetch_ics_text."""
+    try:
+        scheme = AnyUrl(value).scheme
+    except Exception as e:
+        raise ValueError("url_or_path must be a valid http(s) URL") from e
+    if scheme not in ("http", "https"):
+        raise ValueError("url_or_path must be a valid http(s) URL")
+    return value
+
+
 class UserCreate(BaseModel):
     email: str
-    timezone: str = "UTC"
+    timezone: str = "Europe/Paris"
 
 
 class UserOut(BaseModel):
@@ -75,6 +88,8 @@ class IcsSourceCreate(_ReminderOptionsMixin):
     dismissible: bool = True
     snooze_minutes: list[int] = Field(default_factory=list, max_length=3)
 
+    _validate_url = field_validator("url_or_path")(_validate_ics_url)
+
 
 class IcsSourceUpdate(BaseModel):
     url_or_path: str | None = None
@@ -84,6 +99,11 @@ class IcsSourceUpdate(BaseModel):
     kind: ReminderKind | None = None
     dismissible: bool | None = None
     snooze_minutes: list[int] | None = Field(default=None, max_length=3)
+
+    @field_validator("url_or_path")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_ics_url(value)
 
 
 class IcsSourceOut(BaseModel):

@@ -57,3 +57,38 @@ npm run dev  # http://localhost:5173, expects the API at http://localhost:8000
 ```
 
 Set `VITE_API_BASE` (e.g. in `frontend/.env.local`) to point at a different backend URL.
+
+## Deployment
+
+For anything beyond your own LAN, terminate TLS in front of uvicorn and run it as a
+persistent service — the companion app supports `wss://`/`https://` out of the box
+(`BackendClient.buildWebSocketUrl` in the Android app), but nothing here does TLS itself.
+
+1. On the target host, set up the venv and app as in **Running** above, but skip `--reload`.
+   Bind uvicorn to loopback only — it should never be reachable except through the proxy:
+   ```bash
+   uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+2. Keep it running persistently with systemd — copy `deploy/diddy.service.example` to
+   `/etc/systemd/system/diddy.service`, edit the `User`/`WorkingDirectory`/paths for your
+   host, then:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now diddy
+   journalctl -u diddy -f   # logs
+   ```
+3. Point DNS at the host, then set up nginx as a TLS-terminating reverse proxy — copy
+   `deploy/nginx.conf.example` to `/etc/nginx/sites-available/diddy`, edit `server_name`,
+   symlink into `sites-enabled`, `nginx -t`, `systemctl reload nginx`, then run
+   `sudo certbot --nginx -d your-domain.example` to provision the cert (certbot rewrites
+   the TLS block and sets up auto-renewal). See the comments in that file for why `/ws`
+   needs its own `location` block (Upgrade headers, long timeouts, no access log — the
+   `?api_key=...` query param shouldn't land in plaintext logs) and why `/users` is
+   rate-limited (it's the one endpoint reachable with no API key at all).
+4. In the companion app's server field, enter `https://your-domain.example` — the app maps
+   that to `wss://` automatically for the `/ws` connection.
+
+**Known gap:** `POST /users` has no auth beyond being reachable at all — anyone who finds
+the host can register an account. Fine for a short-lived first test with a disposable
+domain; before running this long-term, that endpoint needs real gating (invite token,
+admin-created accounts, etc.) on top of the rate limit in the nginx config.

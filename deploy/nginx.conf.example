@@ -1,0 +1,77 @@
+# Reverse proxy for the Diddy notification server (FastAPI/uvicorn on 127.0.0.1:8000).
+#
+# Setup:
+#   1. Point DNS for your domain at this host.
+#   2. Install nginx + certbot: `sudo apt install nginx certbot python3-certbot-nginx`
+#   3. Copy this file to /etc/nginx/sites-available/diddy, edit `server_name` below,
+#      symlink into sites-enabled, `nginx -t`, `systemctl reload nginx`.
+#   4. Run `sudo certbot --nginx -d your-domain.example` — it rewrites this file's TLS
+#      block for you and sets up auto-renewal. The manual `listen 443`/`ssl_certificate`
+#      lines below are placeholders for that; certbot's edits are what actually take effect.
+#   5. Run the app on the loopback interface only, e.g.
+#      `uvicorn app.main:app --host 127.0.0.1 --port 8000`, so it's not reachable except
+#      through this proxy.
+
+# Rate-limit account creation: POST /users has no auth (see ARCHITECTURE.md) and is the
+# one endpoint a stranger can hit before ever having a key. This just slows down bulk
+# registration/abuse; it isn't a substitute for real auth.
+limit_req_zone $binary_remote_addr zone=diddy_users:10m rate=5r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.example;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name your-domain.example;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+
+    # Companion app's persistent connection (app/routers/ws.py). Needs the Upgrade headers
+    # and a long read timeout - it's meant to stay open indefinitely, not time out like a
+    # normal HTTP request.
+    location /ws {
+        # api_key is passed as a query param (app/routers/ws.py) - don't let it land in the
+        # access log in plaintext.
+        access_log off;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+
+    location /users {
+        limit_req zone=diddy_users burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
