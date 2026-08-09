@@ -20,9 +20,3 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-
-
-def init_db() -> None:
-    from app import models  # noqa: F401  (ensure models are registered)
-
-    Base.metadata.create_all(bind=engine)

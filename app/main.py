@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import init_db
 from app.routers import ics_sources, notifications, schedules, users, ws
 from app.scheduler.jobs import build_scheduler
 
@@ -13,7 +12,8 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    # Schema is owned by Alembic now, not created here - run `alembic upgrade head` before
+    # starting the app (see README.md's "Database migrations" section).
     scheduler = build_scheduler()
     scheduler.start()
     try:
