@@ -39,6 +39,7 @@ class NotificationStatus(str, Enum):
 class RuleType(str, Enum):
     daily_schedule = "daily_schedule"
     ics_reminder = "ics_reminder"
+    manual = "manual"
 
 
 class AckAction(str, Enum):
