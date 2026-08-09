@@ -89,3 +89,7 @@ Android app), but nothing here does TLS itself.
 the host can register an account. Fine for a short-lived first test with a disposable
 domain; before running this long-term, that endpoint needs real gating (invite token,
 admin-created accounts, etc.) on top of the rate limit in the nginx config.
+
+## License
+
+GPLv3 — see [LICENSE](LICENSE).
