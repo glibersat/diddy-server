@@ -101,9 +101,11 @@ class IcsSource(Base):
 class Notification(Base):
     """Outbox/audit log. `rule_type` + `dedupe_key` is the seam future rule types plug into.
 
-    Delivery is fire-and-forget over a per-user WebSocket (companion app relays to the watch's
-    BLE ReminderService); the only proof the wearer saw it is an explicit snooze/dismiss `ack`,
-    so `status` tracks that instead of transport-level delivery.
+    `status == sent` only means the phone's WebSocket accepted the bytes - the companion app
+    drops a `trigger` silently if it isn't currently connected to the watch over BLE. `delivered_at`
+    is the stronger signal: the phone's BLE write of the Trigger characteristic actually completed,
+    reported back as a `delivered` message. `status` still tracks the wearer's snooze/dismiss `ack`
+    on top of that, since delivery to the watch and the wearer acting on it are different things.
     """
 
     __tablename__ = "notifications"
@@ -124,6 +126,7 @@ class Notification(Base):
 
     status: Mapped[NotificationStatus] = mapped_column(String, default=NotificationStatus.pending)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     send_attempts: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
 

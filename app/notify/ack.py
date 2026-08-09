@@ -32,3 +32,29 @@ def record_ack(db: Session, user_id: str, action: AckAction, snoozed_minutes: in
     notification.acked_at = datetime.now(UTC)
     db.commit()
     return notification
+
+
+def record_delivered(db: Session, user_id: str) -> Notification | None:
+    """Apply an inbound `delivered` confirmation to whichever notification it's presumed to be
+    about - same "match the most recently sent notification for this user" assumption as
+    `record_ack`, since the protocol carries no notification id. Only matches a notification not
+    already marked delivered, so a late/duplicate `delivered` for an already-confirmed send
+    doesn't reattribute itself to whatever's sent since.
+    """
+    notification = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.status == NotificationStatus.sent,
+            Notification.delivered_at.is_(None),
+        )
+        .order_by(Notification.sent_at.desc())
+        .first()
+    )
+    if notification is None:
+        logger.warning("Received delivered confirmation for user %s with no outstanding undelivered notification", user_id)
+        return None
+
+    notification.delivered_at = datetime.now(UTC)
+    db.commit()
+    return notification

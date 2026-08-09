@@ -43,19 +43,56 @@ async def dispatch_pending(db: Session) -> int:
     return len(pending)
 
 
-def requeue_unacked(db: Session, now: datetime | None = None) -> int:
-    """Resend notifications that were delivered but never acked within `ack_timeout_seconds`.
+def requeue_undelivered(db: Session, now: datetime | None = None) -> int:
+    """Resend notifications the phone hasn't confirmed reached the watch within
+    `delivery_timeout_seconds`.
 
-    Delivery/ack over this protocol is fire-and-forget with no guarantee (see
-    doc/ReminderService.md and companion-android/docs/backend-protocol.md) - a dropped trigger
-    or an unseen watch alert looks identical to the backend, so re-sending is the only way to
-    approximate a delivery guarantee.
+    A successful send to `manager.send_to_user` only proves the phone's WebSocket accepted the
+    bytes - if the phone isn't currently connected to the watch over BLE (out of range, watch
+    off, etc.) it drops the trigger with no signal back to us at all (see
+    companion-android/docs/backend-protocol.md). The only positive confirmation is a `delivered`
+    message, sent once the phone's BLE write of the Trigger characteristic actually completes -
+    so anything still `sent` with no `delivered_at` after the timeout gets treated as dropped and
+    resent, same as if the WebSocket send itself had failed.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(seconds=settings.delivery_timeout_seconds)
+    stale = (
+        db.query(Notification)
+        .filter(
+            Notification.status == NotificationStatus.sent,
+            Notification.delivered_at.is_(None),
+            Notification.sent_at <= cutoff,
+        )
+        .all()
+    )
+    for notification in stale:
+        if notification.send_attempts >= settings.max_send_attempts:
+            notification.status = NotificationStatus.failed
+            notification.error = "No delivery confirmation received after max_send_attempts"
+        else:
+            notification.status = NotificationStatus.pending
+    db.commit()
+    return len(stale)
+
+
+def requeue_unacked(db: Session, now: datetime | None = None) -> int:
+    """Resend notifications that reached the watch but were never acked within
+    `ack_timeout_seconds` - the wearer never snoozed/dismissed it, so nag again.
+
+    This only runs once a notification is at least `delivered` (see `requeue_undelivered` for the
+    earlier, transport-level gap this doesn't cover): resending here is redundant with that faster
+    loop for anything that never got delivered in the first place.
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=settings.ack_timeout_seconds)
     stale = (
         db.query(Notification)
-        .filter(Notification.status == NotificationStatus.sent, Notification.sent_at <= cutoff)
+        .filter(
+            Notification.status == NotificationStatus.sent,
+            Notification.delivered_at.isnot(None),
+            Notification.sent_at <= cutoff,
+        )
         .all()
     )
     for notification in stale:
@@ -64,5 +101,6 @@ def requeue_unacked(db: Session, now: datetime | None = None) -> int:
             notification.error = "No ack received after max_send_attempts"
         else:
             notification.status = NotificationStatus.pending
+            notification.delivered_at = None
     db.commit()
     return len(stale)

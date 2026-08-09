@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.db import SessionLocal
-from app.notify.dispatcher import dispatch_pending, requeue_unacked
+from app.notify.dispatcher import dispatch_pending, requeue_unacked, requeue_undelivered
 from app.scheduler.daily import run_daily_schedule_tick
 from app.scheduler.ics import run_all_ics_ticks
 
@@ -31,6 +31,11 @@ def _requeue_tick() -> None:
         requeue_unacked(db)
 
 
+def _requeue_undelivered_tick() -> None:
+    with SessionLocal() as db:
+        requeue_undelivered(db)
+
+
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(_daily_tick, "interval", seconds=settings.daily_tick_seconds, id="daily_tick")
@@ -38,5 +43,11 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(_dispatch_tick, "interval", seconds=settings.dispatch_tick_seconds, id="dispatch_tick")
     scheduler.add_job(
         _requeue_tick, "interval", seconds=settings.dispatch_tick_seconds, id="requeue_tick"
+    )
+    scheduler.add_job(
+        _requeue_undelivered_tick,
+        "interval",
+        seconds=settings.dispatch_tick_seconds,
+        id="requeue_undelivered_tick",
     )
     return scheduler

@@ -4,7 +4,7 @@ import pytest
 
 from app.models import AckAction, Notification, NotificationStatus, ReminderKind, RuleType
 from app.notify import dispatcher
-from app.notify.ack import record_ack
+from app.notify.ack import record_ack, record_delivered
 
 
 class FakeConnectionManager:
@@ -80,6 +80,7 @@ def test_requeue_unacked_resends_after_timeout(db_session, user, monkeypatch):
     notification = _pending_notification(user.id)
     notification.status = NotificationStatus.sent
     notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    notification.delivered_at = datetime.now(UTC) - timedelta(seconds=115)
     notification.send_attempts = 1
     db_session.add(notification)
     db_session.commit()
@@ -89,6 +90,7 @@ def test_requeue_unacked_resends_after_timeout(db_session, user, monkeypatch):
     assert requeued == 1
     db_session.refresh(notification)
     assert notification.status == NotificationStatus.pending
+    assert notification.delivered_at is None  # a resend needs reconfirming, same as a first send
 
 
 def test_requeue_unacked_leaves_recently_sent_alone(db_session, user, monkeypatch):
@@ -96,10 +98,80 @@ def test_requeue_unacked_leaves_recently_sent_alone(db_session, user, monkeypatc
     notification = _pending_notification(user.id)
     notification.status = NotificationStatus.sent
     notification.sent_at = datetime.now(UTC) - timedelta(seconds=5)
+    notification.delivered_at = datetime.now(UTC) - timedelta(seconds=5)
     db_session.add(notification)
     db_session.commit()
 
     assert dispatcher.requeue_unacked(db_session) == 0
+
+
+def test_requeue_unacked_ignores_undelivered(db_session, user, monkeypatch):
+    """requeue_unacked is the post-delivery nag loop - anything never delivered is
+    requeue_undelivered's job, resending it here too would just double-send."""
+    monkeypatch.setattr(dispatcher.settings, "ack_timeout_seconds", 60)
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert dispatcher.requeue_unacked(db_session) == 0
+
+
+def test_requeue_undelivered_resends_after_timeout(db_session, user, monkeypatch):
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 60)
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    notification.send_attempts = 1
+    db_session.add(notification)
+    db_session.commit()
+
+    requeued = dispatcher.requeue_undelivered(db_session)
+
+    assert requeued == 1
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.pending
+
+
+def test_requeue_undelivered_leaves_recently_sent_alone(db_session, user, monkeypatch):
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 60)
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=5)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert dispatcher.requeue_undelivered(db_session) == 0
+
+
+def test_requeue_undelivered_ignores_already_delivered(db_session, user, monkeypatch):
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 60)
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    notification.delivered_at = datetime.now(UTC) - timedelta(seconds=110)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert dispatcher.requeue_undelivered(db_session) == 0
+
+
+def test_requeue_undelivered_fails_after_max_attempts(db_session, user, monkeypatch):
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 60)
+    monkeypatch.setattr(dispatcher.settings, "max_send_attempts", 1)
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    notification.send_attempts = 1
+    db_session.add(notification)
+    db_session.commit()
+
+    dispatcher.requeue_undelivered(db_session)
+
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.failed
+    assert notification.error == "No delivery confirmation received after max_send_attempts"
 
 
 def test_record_ack_updates_most_recently_sent_notification(db_session, user):
@@ -123,3 +195,40 @@ def test_record_ack_updates_most_recently_sent_notification(db_session, user):
 
 def test_record_ack_with_no_sent_notification_returns_none(db_session, user):
     assert record_ack(db_session, user.id, AckAction.dismissed, 0) is None
+
+
+def test_record_delivered_updates_most_recently_sent_undelivered_notification(db_session, user):
+    older = _pending_notification(user.id, dedupe_key="old")
+    older.status = NotificationStatus.sent
+    older.sent_at = datetime.now(UTC) - timedelta(minutes=10)
+    newer = _pending_notification(user.id, dedupe_key="new")
+    newer.status = NotificationStatus.sent
+    newer.sent_at = datetime.now(UTC)
+    db_session.add_all([older, newer])
+    db_session.commit()
+
+    delivered = record_delivered(db_session, user.id)
+
+    assert delivered.id == newer.id
+    assert delivered.delivered_at is not None
+    assert delivered.status == NotificationStatus.sent  # delivery != wearer acted on it
+
+
+def test_record_delivered_skips_already_delivered_notification(db_session, user):
+    already_delivered = _pending_notification(user.id, dedupe_key="old")
+    already_delivered.status = NotificationStatus.sent
+    already_delivered.sent_at = datetime.now(UTC) - timedelta(minutes=10)
+    already_delivered.delivered_at = datetime.now(UTC) - timedelta(minutes=9)
+    undelivered = _pending_notification(user.id, dedupe_key="new")
+    undelivered.status = NotificationStatus.sent
+    undelivered.sent_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add_all([already_delivered, undelivered])
+    db_session.commit()
+
+    delivered = record_delivered(db_session, user.id)
+
+    assert delivered.id == undelivered.id
+
+
+def test_record_delivered_with_no_sent_notification_returns_none(db_session, user):
+    assert record_delivered(db_session, user.id) is None

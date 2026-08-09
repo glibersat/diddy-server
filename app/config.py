@@ -17,5 +17,11 @@ class Settings(BaseSettings):
     ack_timeout_seconds: int = 300
     max_send_attempts: int = 5
 
+    # Separate, much shorter timeout for the `delivered` confirmation (BLE write to the watch
+    # actually completed) - a phone that's connected to the backend but not to the watch drops
+    # the trigger with no signal at all, so we can't afford to wait as long as ack_timeout_seconds
+    # before assuming that happened and resending.
+    delivery_timeout_seconds: int = 60
+
 
 settings = Settings()

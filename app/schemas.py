@@ -128,6 +128,13 @@ class AckMessage(BaseModel):
     snoozedMinutes: int = 0
 
 
+class DeliveredMessage(BaseModel):
+    """Inbound WS message confirming a `trigger`'s BLE write to the watch actually completed -
+    distinct from `AckMessage`, which means the wearer acted on it."""
+
+    type: str
+
+
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,6 +149,7 @@ class NotificationOut(BaseModel):
     snooze_minutes: list[int]
     status: NotificationStatus
     sent_at: datetime | None
+    delivered_at: datetime | None
     send_attempts: int
     error: str | None
     ack_action: AckAction | None
