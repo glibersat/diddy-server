@@ -1,16 +1,20 @@
-# Reverse proxy for the Diddy notification server (FastAPI/uvicorn on 127.0.0.1:8000).
+# Reverse proxy + static frontend host for the Diddy notification server.
+# - Backend: FastAPI/uvicorn on 127.0.0.1:8000 (see README.md "Deployment").
+# - Frontend: static Vite/Vue build served directly by nginx from `frontend/dist/`.
 #
 # Setup:
 #   1. Point DNS for your domain at this host.
 #   2. Install nginx + certbot: `sudo apt install nginx certbot python3-certbot-nginx`
-#   3. Copy this file to /etc/nginx/sites-available/diddy, edit `server_name` below,
-#      symlink into sites-enabled, `nginx -t`, `systemctl reload nginx`.
-#   4. Run `sudo certbot --nginx -d your-domain.example` — it rewrites this file's TLS
+#   3. Build the frontend against this same domain and copy the build to the host - see
+#      the "Serving the frontend" section of README.md for the exact commands.
+#   4. Copy this file to /etc/nginx/sites-available/diddy, edit `server_name` and `root`
+#      below, symlink into sites-enabled, `nginx -t`, `systemctl reload nginx`.
+#   5. Run `sudo certbot --nginx -d your-domain.example` — it rewrites this file's TLS
 #      block for you and sets up auto-renewal. The manual `listen 443`/`ssl_certificate`
 #      lines below are placeholders for that; certbot's edits are what actually take effect.
-#   5. Run the app on the loopback interface only, e.g.
-#      `uvicorn app.main:app --host 127.0.0.1 --port 8000`, so it's not reachable except
-#      through this proxy.
+#   6. Run the app on the loopback interface only, e.g.
+#      `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000`, so it's not reachable
+#      except through this proxy.
 
 # Rate-limit account creation: POST /users has no auth (see ARCHITECTURE.md) and is the
 # one endpoint a stranger can hit before ever having a key. This just slows down bulk
@@ -38,6 +42,20 @@ server {
     add_header Strict-Transport-Security "max-age=63072000" always;
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
+
+    # Built frontend (`npm run build` in frontend/, output copied here). SPA routing -
+    # any path that isn't a real static file falls back to index.html so vue-router's
+    # history mode (e.g. a deep link to /notifications) works on refresh.
+    root /var/www/diddy-frontend;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Everything below is the API surface from README.md's "API" section, proxied to the
+    # backend. Listed explicitly (no blanket `location /`) so a typo'd frontend route can
+    # never accidentally fall through to uvicorn or vice versa.
 
     # Companion app's persistent connection (app/routers/ws.py). Needs the Upgrade headers
     # and a long read timeout - it's meant to stay open indefinitely, not time out like a
@@ -67,7 +85,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location / {
+    location ~ ^/(schedules|ics-sources|notifications|health)(/|$) {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
