@@ -89,6 +89,19 @@ export async function listNotifications(): Promise<Notification[]> {
   return data
 }
 
+export interface HeartRateReading {
+  id: string
+  bpm: number
+  recorded_at: string
+}
+
+export async function listHeartRate(since: Date, until: Date): Promise<HeartRateReading[]> {
+  const { data } = await client.get<HeartRateReading[]>('/heart-rate', {
+    params: { since: since.toISOString(), until: until.toISOString() },
+  })
+  return data
+}
+
 export async function createUser(email: string, timezone: string): Promise<User> {
   const { data } = await client.post<User>('/users', { email, timezone })
   return data

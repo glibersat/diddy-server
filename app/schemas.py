@@ -135,6 +135,24 @@ class DeliveredMessage(BaseModel):
     type: str
 
 
+class HeartRateMessage(BaseModel):
+    """Inbound WS message, one per reading the watch produces - see
+    companion-android/docs/backend-protocol.md. `timestamp` is milliseconds since epoch, stamped
+    by the phone on receipt."""
+
+    type: str
+    bpm: int
+    timestamp: int
+
+
+class HeartRateReadingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    bpm: int
+    recorded_at: datetime
+
+
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

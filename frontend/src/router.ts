@@ -4,6 +4,7 @@ import LoginView from './views/LoginView.vue'
 import SchedulesView from './views/SchedulesView.vue'
 import IcsSourcesView from './views/IcsSourcesView.vue'
 import NotificationsView from './views/NotificationsView.vue'
+import HeartRateView from './views/HeartRateView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -13,6 +14,7 @@ const router = createRouter({
     { path: '/schedules', name: 'schedules', component: SchedulesView, meta: { requiresAuth: true } },
     { path: '/ics-sources', name: 'ics-sources', component: IcsSourcesView, meta: { requiresAuth: true } },
     { path: '/notifications', name: 'notifications', component: NotificationsView, meta: { requiresAuth: true } },
+    { path: '/heart-rate', name: 'heart-rate', component: HeartRateView, meta: { requiresAuth: true } },
   ],
 })
 

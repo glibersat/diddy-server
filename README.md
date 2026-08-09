@@ -72,7 +72,8 @@ uv run pytest
 - `POST/GET/PATCH/DELETE /schedules` — daily schedules
 - `POST/GET/PATCH/DELETE /ics-sources` — ICS reminder sources
 - `GET /notifications` — outbox/audit log, including ack status
-- `WS /ws?api_key=...` — companion app connection: receives `trigger`, sends `ack`
+- `GET /heart-rate?since=...&until=...` — bpm readings from the watch, optionally windowed
+- `WS /ws?api_key=...` — companion app connection: receives `trigger`, sends `ack`/`delivered`/`heart_rate`
 
 ## Frontend
 

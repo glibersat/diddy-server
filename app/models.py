@@ -135,3 +135,24 @@ class Notification(Base):
     acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class HeartRateReading(Base):
+    """One `heart_rate` message from the companion app - see
+    companion-android/docs/backend-protocol.md. Sent for every reading the watch produces, spot
+    check or periodic background sample alike, with no de-dup key: the phone doesn't identify
+    readings, so a duplicate resend (there isn't one today, but nothing rules it out later) would
+    just show up as two rows.
+    """
+
+    __tablename__ = "heart_rate_readings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    bpm: Mapped[int] = mapped_column()
+    # Stamped by the phone on receipt, not by the watch - see the `timestamp` field note in
+    # backend-protocol.md. Indexed since every query against this table is a range scan by time.
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    user: Mapped["User"] = relationship()

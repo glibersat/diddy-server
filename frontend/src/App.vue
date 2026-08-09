@@ -55,6 +55,13 @@ async function copyKey() {
           >
             Notifications
           </RouterLink>
+          <RouterLink
+            to="/heart-rate"
+            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
+            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
+          >
+            Heart Rate
+          </RouterLink>
         </nav>
         <button
           class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-4 py-2 cursor-pointer"
