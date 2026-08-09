@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, UTC
 
 import pytest
 
-from app.models import AckAction, Notification, NotificationStatus, ReminderKind, RuleType
+from app.models import AckAction, Notification, NotificationStatus, ReminderKind, RuleType, User
 from app.notify import dispatcher
 from app.notify.ack import record_ack, record_delivered
 
@@ -73,6 +73,68 @@ async def test_dispatch_pending_fails_after_max_attempts(db_session, user, monke
     await dispatcher.dispatch_pending(db_session)
     db_session.refresh(notification)
     assert notification.status == NotificationStatus.failed  # attempt 2 == max, gives up
+
+
+@pytest.mark.asyncio
+async def test_resend_now_resends_sent_but_undelivered_immediately(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 9999)  # would not be due yet
+
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=1)
+    notification.send_attempts = 1
+    db_session.add(notification)
+    db_session.commit()
+
+    resent = await dispatcher.resend_now(db_session, user.id)
+
+    assert resent == 1
+    assert fake.sent[0][0] == user.id
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.sent
+    assert notification.send_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_resend_now_ignores_already_delivered(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=1)
+    notification.delivered_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert await dispatcher.resend_now(db_session, user.id) == 0
+    assert fake.sent == []
+
+
+@pytest.mark.asyncio
+async def test_resend_now_only_touches_the_given_user(db_session, user, monkeypatch):
+    other = User(email="grace@example.com", timezone="UTC")
+    db_session.add(other)
+    db_session.commit()
+    db_session.refresh(other)
+
+    fake = FakeConnectionManager(connected_users={user.id, other.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    mine = _pending_notification(user.id, dedupe_key="mine")
+    mine.status = NotificationStatus.sent
+    mine.sent_at = datetime.now(UTC) - timedelta(seconds=1)
+    theirs = _pending_notification(other.id, dedupe_key="theirs")
+    theirs.status = NotificationStatus.sent
+    theirs.sent_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.add_all([mine, theirs])
+    db_session.commit()
+
+    assert await dispatcher.resend_now(db_session, user.id) == 1
+    db_session.refresh(theirs)
+    assert theirs.status == NotificationStatus.sent  # untouched - not this user, so resend_now leaves it alone
 
 
 def test_requeue_unacked_resends_after_timeout(db_session, user, monkeypatch):

@@ -47,6 +47,14 @@ notifications are periodically **resent**: `app/notify/dispatcher.py::requeue_un
 up to `DIDDY_MAX_SEND_ATTEMPTS` before giving up (`status = failed`). This is the "make sure the
 reminder was actually done" mechanism.
 
+Undelivered notifications (phone connected to the backend, but not to the watch over BLE - see
+above) don't have to wait out `requeue_undelivered`'s `DIDDY_DELIVERY_TIMEOUT_SECONDS` timeout in
+the common case: the companion app sends a `watch_ready` message as soon as its BLE connection to
+the watch comes up (including reconnects), and `app/notify/dispatcher.py::resend_now` (wired in
+`app/routers/ws.py`) immediately retries anything `sent`-but-not-`delivered` for that user. The
+timeout-based `requeue_undelivered` job is still the fallback for when `watch_ready` itself
+doesn't arrive.
+
 ## Data model (`app/models.py`)
 
 - `User(id, email, api_key, timezone)` — one API key per user, sent as `X-API-Key` on HTTP

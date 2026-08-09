@@ -7,8 +7,9 @@ from app.db import SessionLocal
 from app.models import AckAction, User
 from app.notify.ack import record_ack, record_delivered
 from app.notify.connection_manager import manager
+from app.notify.dispatcher import resend_now
 from app.notify.heart_rate import record_heart_rate
-from app.schemas import AckMessage, DeliveredMessage, HeartRateMessage
+from app.schemas import AckMessage, DeliveredMessage, HeartRateMessage, WatchReadyMessage
 
 logger = logging.getLogger("diddy.routers.ws")
 
@@ -49,6 +50,14 @@ async def companion_ws(websocket: WebSocket, api_key: str) -> None:
                     continue
                 with SessionLocal() as db:
                     record_delivered(db, user.id)
+            elif msg_type == "watch_ready":
+                try:
+                    WatchReadyMessage.model_validate(raw)
+                except ValidationError:
+                    logger.info("Ignoring malformed message from user %s: %r", user.id, raw)
+                    continue
+                with SessionLocal() as db:
+                    await resend_now(db, user.id)
             elif msg_type == "heart_rate":
                 try:
                     message = HeartRateMessage.model_validate(raw)

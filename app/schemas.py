@@ -135,6 +135,14 @@ class DeliveredMessage(BaseModel):
     type: str
 
 
+class WatchReadyMessage(BaseModel):
+    """Inbound WS message: the phone's BLE connection to the watch just became ready (including
+    a reconnect after being out of range/off). Prompts an immediate retry of anything `sent` but
+    never `delivered`, instead of waiting for `requeue_undelivered`'s timeout."""
+
+    type: str
+
+
 class HeartRateMessage(BaseModel):
     """Inbound WS message, one per reading the watch produces - see
     companion-android/docs/backend-protocol.md. `timestamp` is milliseconds since epoch, stamped
