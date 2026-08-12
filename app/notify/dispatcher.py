@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, UTC
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -87,19 +88,30 @@ async def resend_now(db: Session, user_id: str) -> int:
     again (`watch_ready` over the WS) - retry anything we handed to this phone but never got a
     `delivered` confirmation for, instead of waiting out `requeue_undelivered`'s timeout.
 
-    Same "sent but not delivered" query as `requeue_undelivered`, just event-triggered and scoped
-    to one user rather than a periodic sweep of everyone.
+    Also revives anything that already gave up (`failed`): `max_send_attempts` is tuned for how
+    fast a *reachable* device should ack, not for how long a watch might reasonably be away, so a
+    notification can easily exhaust its attempt budget and land in `failed` well before the wearer
+    actually reconnects. Without this, "watch was away for a while, then reconnected" - the exact
+    case `watch_ready` exists to handle - reconnected to a dead end: `dispatch_pending` only looks
+    at `pending`, so nothing would ever pick a `failed` row back up. A reconnect gets a fresh
+    attempt budget, since exhausting the old one was about the earlier disconnected stretch, not
+    this attempt.
     """
     stale = (
         db.query(Notification)
         .filter(
             Notification.user_id == user_id,
-            Notification.status == NotificationStatus.sent,
-            Notification.delivered_at.is_(None),
+            or_(
+                and_(Notification.status == NotificationStatus.sent, Notification.delivered_at.is_(None)),
+                Notification.status == NotificationStatus.failed,
+            ),
         )
         .all()
     )
     for notification in stale:
+        if notification.status == NotificationStatus.failed:
+            notification.send_attempts = 0
+            notification.error = None
         notification.status = NotificationStatus.pending
     db.commit()
     return await dispatch_pending(db, user_id=user_id)

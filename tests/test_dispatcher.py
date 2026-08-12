@@ -114,6 +114,31 @@ async def test_resend_now_ignores_already_delivered(db_session, user, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_resend_now_revives_failed_notification_with_fresh_attempt_budget(db_session, user, monkeypatch):
+    """The exact case `watch_ready` exists for: the watch was away long enough that the server
+    gave up (`failed`) before it came back. Reconnecting must still fire the reminder."""
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+    monkeypatch.setattr(dispatcher.settings, "max_send_attempts", 2)
+
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.failed
+    notification.send_attempts = 2
+    notification.error = "No connected device after max_send_attempts"
+    db_session.add(notification)
+    db_session.commit()
+
+    resent = await dispatcher.resend_now(db_session, user.id)
+
+    assert resent == 1
+    assert fake.sent[0][0] == user.id
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.sent
+    assert notification.send_attempts == 1  # fresh budget, not resumed from the old exhausted count
+    assert notification.error is None
+
+
+@pytest.mark.asyncio
 async def test_resend_now_only_touches_the_given_user(db_session, user, monkeypatch):
     other = User(email="grace@example.com", timezone="UTC")
     db_session.add(other)
