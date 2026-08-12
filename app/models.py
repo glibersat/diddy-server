@@ -3,10 +3,10 @@ import uuid
 from datetime import datetime, UTC
 from enum import Enum
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 def _uuid() -> str:
@@ -54,7 +54,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, index=True)
     api_key: Mapped[str] = mapped_column(String, unique=True, index=True, default=_api_key)
     timezone: Mapped[str] = mapped_column(String, default="UTC")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
     daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -90,7 +90,7 @@ class IcsSource(Base):
     offsets_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
     refresh_minutes: Mapped[int] = mapped_column(default=15)
     enabled: Mapped[bool] = mapped_column(default=True)
-    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.appointment)
     dismissible: Mapped[bool] = mapped_column(default=True)
@@ -117,7 +117,7 @@ class Notification(Base):
     rule_type: Mapped[RuleType] = mapped_column(String)
     rule_id: Mapped[str] = mapped_column(String)
     dedupe_key: Mapped[str] = mapped_column(String, unique=True, index=True)
-    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime)
     title: Mapped[str] = mapped_column(String)
     body: Mapped[str] = mapped_column(String)
 
@@ -126,16 +126,16 @@ class Notification(Base):
     snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
 
     status: Mapped[NotificationStatus] = mapped_column(String, default=NotificationStatus.pending)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     send_attempts: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
 
     ack_action: Mapped[AckAction | None] = mapped_column(String, nullable=True)
     ack_snoozed_minutes: Mapped[int | None] = mapped_column(nullable=True)
-    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
 
 class HeartRateReading(Base):
@@ -153,7 +153,7 @@ class HeartRateReading(Base):
     bpm: Mapped[int] = mapped_column()
     # Stamped by the phone on receipt, not by the watch - see the `timestamp` field note in
     # backend-protocol.md. Indexed since every query against this table is a range scan by time.
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
     user: Mapped["User"] = relationship()
