@@ -77,6 +77,7 @@ export interface Notification {
   snooze_minutes: number[]
   status: NotificationStatus
   sent_at: string | null
+  delivered_at: string | null
   send_attempts: number
   error: string | null
   ack_action: AckAction | null
@@ -84,8 +85,23 @@ export interface Notification {
   acked_at: string | null
 }
 
+export interface NextReminder {
+  rule_type: 'daily_schedule' | 'ics_reminder'
+  title: string
+  body: string
+  kind: ReminderKind
+  scheduled_for: string
+}
+
 export async function listNotifications(): Promise<Notification[]> {
   const { data } = await client.get<Notification[]>('/notifications')
+  return data
+}
+
+/** Predicted, not a real Notification row yet - see app/notify/next_up.py. Null if no enabled
+ * schedule or ICS source has an upcoming occurrence in the lookahead window. */
+export async function getNextNotification(): Promise<NextReminder | null> {
+  const { data } = await client.get<NextReminder | null>('/notifications/next')
   return data
 }
 

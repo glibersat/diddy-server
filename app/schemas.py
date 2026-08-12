@@ -161,6 +161,16 @@ class HeartRateReadingOut(BaseModel):
     recorded_at: datetime
 
 
+class NextReminderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    rule_type: RuleType
+    title: str
+    body: str
+    kind: ReminderKind
+    scheduled_for: datetime
+
+
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
