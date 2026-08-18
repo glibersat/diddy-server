@@ -61,17 +61,22 @@ def expand_occurrences(ics_text: str, window_start: datetime, window_end: dateti
     return occurrences
 
 
-def compute_due(
+def compute_known(
     occurrences: list[Occurrence], offsets_minutes: list[int], now: datetime
-) -> list[tuple[Occurrence, int]]:
-    """An occurrence+offset is "due" once its trigger time has passed but the event hasn't started."""
-    due = []
+) -> list[tuple[Occurrence, int, datetime]]:
+    """An occurrence+offset is "known" as soon as the occurrence itself is (i.e. within
+    `expand_occurrences`' window), as long as the event hasn't started yet - pushed ahead of the
+    actual trigger time now, rather than gated on `trigger <= now` like before. Returns the
+    trigger datetime alongside each pair since callers need it for `scheduled_for`.
+    """
+    known = []
     for occurrence in occurrences:
+        if now >= occurrence.start:
+            continue  # already started - too late to be useful as a reminder
         for offset in offsets_minutes:
             trigger = occurrence.start - timedelta(minutes=offset)
-            if trigger <= now < occurrence.start:
-                due.append((occurrence, offset))
-    return due
+            known.append((occurrence, offset, trigger))
+    return known
 
 
 def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = None) -> int:
@@ -81,14 +86,14 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
     occurrences = expand_occurrences(ics_text, now - timedelta(minutes=5), now + lookahead)
 
     created = 0
-    for occurrence, offset in compute_due(occurrences, source.offsets_minutes, now):
+    for occurrence, offset, trigger in compute_known(occurrences, source.offsets_minutes, now):
         dedupe_key = f"ics:{source.id}:{occurrence.uid}:{occurrence.start.isoformat()}:{offset}"
         notification = Notification(
             user_id=source.user_id,
             rule_type=RuleType.ics_reminder,
             rule_id=source.id,
             dedupe_key=dedupe_key,
-            scheduled_for=now,
+            scheduled_for=trigger,
             title=f"In {offset} min: {occurrence.summary}",
             body=f"{occurrence.summary} starts at {occurrence.start.strftime('%H:%M')}",
             kind=source.kind,

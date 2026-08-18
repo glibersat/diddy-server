@@ -5,7 +5,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Notification, NotificationStatus
+from app.models import Notification, NotificationStatus, RuleType
 from app.notify.connection_manager import manager
 
 logger = logging.getLogger("diddy.notify.dispatcher")
@@ -14,6 +14,7 @@ logger = logging.getLogger("diddy.notify.dispatcher")
 def _trigger_payload(notification: Notification) -> dict:
     return {
         "type": "trigger",
+        "notification_id": notification.id,
         "kind": notification.kind,
         "easyDismiss": notification.dismissible,
         "snoozeMinutes": notification.snooze_minutes,
@@ -22,10 +23,37 @@ def _trigger_payload(notification: Notification) -> dict:
     }
 
 
-async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
-    """Send every `pending` Notification as a `trigger` over its user's companion WebSocket.
+def _schedule_payload(notification: Notification) -> dict:
+    """See companion-android/docs/backend-protocol.md's `schedule` message and
+    ReminderService.md's Schedule characteristic - `fireAt` is the watch's cue to fire this
+    locally, independent of any connection at that time."""
+    return {
+        "type": "schedule",
+        "notification_id": notification.id,
+        "fireAt": int(notification.scheduled_for.timestamp()),
+        "kind": notification.kind,
+        "easyDismiss": notification.dismissible,
+        "snoozeMinutes": notification.snooze_minutes,
+        "title": notification.title,
+        "body": notification.body,
+    }
 
-    A successful send only means the phone received it - not that the watch showed it, and
+
+def _payload_for(notification: Notification, now: datetime) -> dict:
+    """`manual` pushes and anything already due are sent live (`trigger`); anything with a known
+    future fire time is pushed ahead as a `schedule`, so it's on-watch well before it needs to
+    fire - see daily.py/ics.py, which now enqueue occurrences ahead of time rather than at the
+    exact matching tick."""
+    if notification.rule_type == RuleType.manual or notification.scheduled_for <= now:
+        return _trigger_payload(notification)
+    return _schedule_payload(notification)
+
+
+async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
+    """Send every `pending` Notification as a `trigger` or `schedule` over its user's companion
+    WebSocket, depending on whether it's already due - see `_payload_for`.
+
+    A successful send only means the phone received it - not that the watch showed/stored it, and
     definitely not that the wearer acted on it. `requeue_unacked` is what handles that gap.
 
     `user_id` scopes this to one user's notifications - used by `resend_now` so a single watch
@@ -37,7 +65,7 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     pending = query.all()
     now = datetime.now(UTC)
     for notification in pending:
-        delivered = await manager.send_to_user(notification.user_id, _trigger_payload(notification))
+        delivered = await manager.send_to_user(notification.user_id, _payload_for(notification, now))
         notification.send_attempts += 1
         if delivered:
             notification.status = NotificationStatus.sent
@@ -48,6 +76,16 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
         # else: stays `pending`, picked up again on the next dispatch tick
     db.commit()
     return len(pending)
+
+
+async def send_cancel(notification: Notification) -> bool:
+    """Tells the phone to remove a not-yet-fired `schedule` it already has - e.g. the underlying
+    DailySchedule/IcsSource changed or was removed after the occurrence was pushed. Caller is
+    responsible for the Notification row itself (typically deleting it); this only notifies the
+    phone/watch. Returns whatever `send_to_user` returns - false just means nothing was connected
+    to tell right now, same "fire and forget, no retry" contract `trigger` has always had.
+    """
+    return await manager.send_to_user(notification.user_id, {"type": "cancel", "notification_id": notification.id})
 
 
 def requeue_undelivered(db: Session, now: datetime | None = None) -> int:

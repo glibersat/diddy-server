@@ -261,44 +261,52 @@ def test_requeue_undelivered_fails_after_max_attempts(db_session, user, monkeypa
     assert notification.error == "No delivery confirmation received after max_send_attempts"
 
 
-def test_record_ack_updates_most_recently_sent_notification(db_session, user):
-    older = _pending_notification(user.id, dedupe_key="old")
-    older.status = NotificationStatus.sent
-    older.sent_at = datetime.now(UTC) - timedelta(minutes=10)
-    newer = _pending_notification(user.id, dedupe_key="new")
-    newer.status = NotificationStatus.sent
-    newer.sent_at = datetime.now(UTC)
-    db_session.add_all([older, newer])
+def test_record_ack_updates_the_named_notification(db_session, user):
+    other = _pending_notification(user.id, dedupe_key="other")
+    other.status = NotificationStatus.sent
+    other.sent_at = datetime.now(UTC)
+    target = _pending_notification(user.id, dedupe_key="target")
+    target.status = NotificationStatus.sent
+    target.sent_at = datetime.now(UTC) - timedelta(minutes=10)  # older, but it's the one named
+    db_session.add_all([other, target])
     db_session.commit()
 
-    acked = record_ack(db_session, user.id, AckAction.snoozed, 15)
+    acked = record_ack(db_session, user.id, target.id, AckAction.snoozed, 15)
 
-    assert acked.id == newer.id
+    assert acked.id == target.id
     assert acked.status == NotificationStatus.acked
     assert acked.ack_action == AckAction.snoozed
     assert acked.ack_snoozed_minutes == 15
     assert acked.acked_at is not None
+    db_session.refresh(other)
+    assert other.status == NotificationStatus.sent  # untouched
 
 
-def test_record_ack_with_no_sent_notification_returns_none(db_session, user):
-    assert record_ack(db_session, user.id, AckAction.dismissed, 0) is None
+def test_record_ack_with_no_notification_id_returns_none(db_session, user):
+    assert record_ack(db_session, user.id, None, AckAction.dismissed, 0) is None
 
 
-def test_record_delivered_updates_most_recently_sent_undelivered_notification(db_session, user):
-    older = _pending_notification(user.id, dedupe_key="old")
-    older.status = NotificationStatus.sent
-    older.sent_at = datetime.now(UTC) - timedelta(minutes=10)
-    newer = _pending_notification(user.id, dedupe_key="new")
-    newer.status = NotificationStatus.sent
-    newer.sent_at = datetime.now(UTC)
-    db_session.add_all([older, newer])
+def test_record_ack_with_unknown_notification_id_returns_none(db_session, user):
+    assert record_ack(db_session, user.id, "does-not-exist", AckAction.dismissed, 0) is None
+
+
+def test_record_delivered_updates_the_named_notification(db_session, user):
+    other = _pending_notification(user.id, dedupe_key="other")
+    other.status = NotificationStatus.sent
+    other.sent_at = datetime.now(UTC)
+    target = _pending_notification(user.id, dedupe_key="target")
+    target.status = NotificationStatus.sent
+    target.sent_at = datetime.now(UTC) - timedelta(minutes=10)
+    db_session.add_all([other, target])
     db_session.commit()
 
-    delivered = record_delivered(db_session, user.id)
+    delivered = record_delivered(db_session, user.id, target.id)
 
-    assert delivered.id == newer.id
+    assert delivered.id == target.id
     assert delivered.delivered_at is not None
     assert delivered.status == NotificationStatus.sent  # delivery != wearer acted on it
+    db_session.refresh(other)
+    assert other.delivered_at is None  # untouched
 
 
 def test_record_delivered_skips_already_delivered_notification(db_session, user):
@@ -306,16 +314,11 @@ def test_record_delivered_skips_already_delivered_notification(db_session, user)
     already_delivered.status = NotificationStatus.sent
     already_delivered.sent_at = datetime.now(UTC) - timedelta(minutes=10)
     already_delivered.delivered_at = datetime.now(UTC) - timedelta(minutes=9)
-    undelivered = _pending_notification(user.id, dedupe_key="new")
-    undelivered.status = NotificationStatus.sent
-    undelivered.sent_at = datetime.now(UTC) - timedelta(minutes=5)
-    db_session.add_all([already_delivered, undelivered])
+    db_session.add(already_delivered)
     db_session.commit()
 
-    delivered = record_delivered(db_session, user.id)
-
-    assert delivered.id == undelivered.id
+    assert record_delivered(db_session, user.id, already_delivered.id) is None
 
 
-def test_record_delivered_with_no_sent_notification_returns_none(db_session, user):
-    assert record_delivered(db_session, user.id) is None
+def test_record_delivered_with_no_notification_id_returns_none(db_session, user):
+    assert record_delivered(db_session, user.id, None) is None

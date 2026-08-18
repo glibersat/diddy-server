@@ -26,17 +26,28 @@ protocol was found. Delivery is **not** push notifications — it's a persistent
 
 - Companion app connects to `ws://<host>/ws?api_key=<user's api key>` and stays connected
   (auto-reconnect with backoff is the phone's job, not this server's).
-- Backend → phone: `{"type": "trigger", "kind": ..., "dismissible": ..., "snoozeMinutes": [...],
-  "title": ..., "body": ...}`. Fire-and-forget — sending it doesn't mean the watch showed it, and
-  if the phone isn't BLE-connected to the watch the trigger is silently dropped with no error
-  back to us.
-- Phone → backend: `{"type": "ack", "action": "snoozed"|"dismissed", "snoozedMinutes": int}`,
-  sent only when the wearer explicitly snoozes or dismisses on-watch. No notification ID is
-  included — the protocol assumes (like the watch firmware) that only one reminder is active at
-  a time, so we match an incoming ack to **the most recently `sent` notification for that
-  user** (`app/notify/ack.py::record_ack`).
-- There is no ack for "reminder timed out," "was replaced by a newer trigger," or "re-fired after
-  a snooze expires" — snooze re-arming happens entirely on-watch, invisible to the backend.
+- Backend → phone: `{"type": "trigger", "notification_id": ..., "kind": ..., "dismissible": ...,
+  "snoozeMinutes": [...], "title": ..., "body": ...}` for anything with no useful lead time (a
+  `manual` push, or already due by dispatch time). For anything with a future fire time, `{"type":
+  "schedule", "notification_id": ..., "fireAt": <epoch>, ...}` instead, sent as soon as the
+  `Notification` row exists rather than waiting until it's due — the phone relays this as a BLE
+  Schedule write, which the watch stores and fires **locally**, off its own clock, independent of
+  any connection at fire time. `{"type": "cancel", "notification_id": ...}` retracts a `schedule`
+  that hasn't fired yet (rule edited/removed after it was pushed). All three are fire-and-forget —
+  sending one doesn't mean the watch showed/stored it, and if the phone isn't BLE-connected to the
+  watch it's silently dropped with no error back to us.
+- Phone → backend: `{"type": "ack", "notification_id": ..., "action": "snoozed"|"dismissed",
+  "snoozedMinutes": int}`, sent when the wearer explicitly snoozes or dismisses on-watch —
+  including well after the fact, since the watch itself now persists and replays an ack produced
+  while disconnected (indicate-based Ack characteristic, see `ReminderService.md`). Matched by
+  `notification_id` directly (`app/notify/ack.py::record_ack`) — no longer "the most recently
+  `sent` notification for that user"; once a reminder can be scheduled ahead and fired while fully
+  offline, more than one can plausibly be outstanding at once. `notification_id` can still be null
+  if the phone couldn't resolve it (e.g. app process restarted since the `schedule` was sent) —
+  logged, not applied to any row.
+- There is no ack for "reminder timed out," "was replaced by a newer trigger/schedule," or
+  "re-fired after a snooze expires" — snooze re-arming happens entirely on-watch, invisible to the
+  backend.
 - Invariant carried over from the firmware (`ReminderController::Options`): if `dismissible` is
   `false`, `snooze_minutes` must be non-empty, or the wearer could never clear it. Enforced in
   `app/schemas.py::_ReminderOptionsMixin`.
@@ -82,9 +93,9 @@ Four APScheduler jobs (`AsyncIOScheduler`, started/stopped in `app/main.py`'s li
 
 | Job | Interval (default) | Does |
 |---|---|---|
-| `_daily_tick` | 60s (`DIDDY_DAILY_TICK_SECONDS`) | `daily.py::run_daily_schedule_tick` — matches each enabled `DailySchedule` against "now" in the user's tz; inserts a `Notification` (dedupe key = `daily:{schedule_id}:{local_date}`, so a slow/duplicate tick can't double-fire). |
-| `_ics_tick` | 300s (`DIDDY_ICS_REFRESH_SECONDS`) | `ics.py::run_all_ics_ticks` — for each `IcsSource` due for refresh, fetches + parses the ICS (including basic `RRULE` expansion via `dateutil`), and for each event×offset whose trigger time has just passed, inserts a `Notification` (dedupe key includes event UID + occurrence start + offset). |
-| `_dispatch_tick` | 30s (`DIDDY_DISPATCH_TICK_SECONDS`) | `dispatcher.py::dispatch_pending` (async) — sends every `pending` `Notification` as a `trigger` over the recipient's WebSocket(s) via `ConnectionManager`. |
+| `_daily_tick` | 60s (`DIDDY_DAILY_TICK_SECONDS`) | `daily.py::run_daily_schedule_tick` — for each enabled `DailySchedule`, computes its *next* occurrence (today's if still upcoming, otherwise the next enabled weekday) and inserts a `Notification` for it ahead of time, with `scheduled_for` set to that future fire time (dedupe key = `daily:{schedule_id}:{occurrence_date}`, so re-running before the next occurrence rolls into view is a no-op). |
+| `_ics_tick` | 300s (`DIDDY_ICS_REFRESH_SECONDS`) | `ics.py::run_all_ics_ticks` — for each `IcsSource` due for refresh, fetches + parses the ICS (including basic `RRULE` expansion via `dateutil`), and for each event×offset seen within the lookahead window (not yet started), inserts a `Notification` ahead of its actual trigger time (dedupe key includes event UID + occurrence start + offset). |
+| `_dispatch_tick` | 30s (`DIDDY_DISPATCH_TICK_SECONDS`) | `dispatcher.py::dispatch_pending` (async) — sends every `pending` `Notification` over the recipient's WebSocket(s) via `ConnectionManager`, as a `trigger` (already due, or a `manual` push) or a `schedule` (future `scheduled_for`) — see `dispatcher.py::_payload_for`. |
 | `_requeue_tick` | 30s | `dispatcher.py::requeue_unacked` — the resend-until-acked logic described above. |
 
 Decide-it's-due (`daily.py`, `ics.py`) and deliver-it (`dispatcher.py`) are deliberately separate

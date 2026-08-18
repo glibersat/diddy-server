@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.models import IcsSource, Notification
-from app.scheduler.ics import compute_due, expand_occurrences, fetch_ics_text, run_ics_source_tick
+from app.scheduler.ics import compute_known, expand_occurrences, fetch_ics_text, run_ics_source_tick
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.ics"
 
@@ -26,19 +26,21 @@ def test_expand_occurrences_includes_single_and_recurring_events():
     assert "event-2-recurring@example.com" in uids  # the 01-03 instance of the daily recurrence
 
 
-def test_compute_due_only_after_trigger_and_before_start():
+def test_compute_known_as_soon_as_the_occurrence_is_seen():
+    """Pushed ahead of trigger time now: both offsets are "known" well before either trigger
+    actually arrives, as long as the event hasn't started yet."""
     ics_text = FIXTURE.read_text()
     occurrences = expand_occurrences(
         ics_text, datetime(2024, 1, 3, 0, 0, tzinfo=UTC), datetime(2024, 1, 4, 0, 0, tzinfo=UTC)
     )
 
-    before_trigger = compute_due(occurrences, [30, 15], now=datetime(2024, 1, 3, 9, 0, tzinfo=UTC))
-    at_30min_trigger = compute_due(occurrences, [30, 15], now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
-    after_start = compute_due(occurrences, [30, 15], now=datetime(2024, 1, 3, 10, 0, tzinfo=UTC))
+    well_before_trigger = compute_known(occurrences, [30, 15], now=datetime(2024, 1, 3, 9, 0, tzinfo=UTC))
+    at_30min_trigger = compute_known(occurrences, [30, 15], now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
+    after_start = compute_known(occurrences, [30, 15], now=datetime(2024, 1, 3, 10, 0, tzinfo=UTC))
 
-    assert before_trigger == []
-    assert [offset for _, offset in at_30min_trigger if _.uid == "event-1@example.com"] == [30]
-    assert after_start == []  # event has started, no longer "due"
+    assert sorted(offset for occ, offset, _ in well_before_trigger if occ.uid == "event-1@example.com") == [15, 30]
+    assert sorted(offset for occ, offset, _ in at_30min_trigger if occ.uid == "event-1@example.com") == [15, 30]
+    assert after_start == []  # event has started, too late to be a useful reminder
 
 
 def test_run_ics_source_tick_creates_and_dedupes_notifications(db_session, user, monkeypatch):

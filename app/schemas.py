@@ -121,18 +121,26 @@ class IcsSourceOut(BaseModel):
 
 
 class AckMessage(BaseModel):
-    """Inbound WS message from the companion app, mirroring the BLE Ack characteristic."""
+    """Inbound WS message from the companion app, mirroring the BLE Ack characteristic.
+
+    `notification_id` is null when the phone couldn't resolve the watch's ack back to a specific
+    notification (e.g. a live `trigger` push whose id the app lost track of - see
+    companion-android's WatchNotificationIdMap) - `record_ack` still logs it but can't apply it to
+    a specific row.
+    """
 
     type: str
+    notification_id: str | None = None
     action: str
     snoozedMinutes: int = 0
 
 
 class DeliveredMessage(BaseModel):
-    """Inbound WS message confirming a `trigger`'s BLE write to the watch actually completed -
-    distinct from `AckMessage`, which means the wearer acted on it."""
+    """Inbound WS message confirming a `trigger`/`schedule`'s BLE write to the watch actually
+    completed - distinct from `AckMessage`, which means the wearer acted on it."""
 
     type: str
+    notification_id: str | None = None
 
 
 class WatchReadyMessage(BaseModel):

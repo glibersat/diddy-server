@@ -39,17 +39,18 @@ async def companion_ws(websocket: WebSocket, api_key: str) -> None:
                     record_ack(
                         db,
                         user.id,
+                        message.notification_id,
                         AckAction(message.action),
                         message.snoozedMinutes,
                     )
             elif msg_type == "delivered":
                 try:
-                    DeliveredMessage.model_validate(raw)
+                    message = DeliveredMessage.model_validate(raw)
                 except ValidationError:
                     logger.info("Ignoring malformed message from user %s: %r", user.id, raw)
                     continue
                 with SessionLocal() as db:
-                    record_delivered(db, user.id)
+                    record_delivered(db, user.id, message.notification_id)
             elif msg_type == "watch_ready":
                 try:
                     WatchReadyMessage.model_validate(raw)
