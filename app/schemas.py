@@ -30,6 +30,14 @@ class UserOut(BaseModel):
     email: str
     api_key: str
     timezone: str
+    digest_enabled: bool
+    digest_time: str | None
+
+
+class UserUpdate(BaseModel):
+    timezone: str | None = None
+    digest_enabled: bool | None = None
+    digest_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class _ReminderOptionsMixin(BaseModel):

@@ -40,6 +40,7 @@ class RuleType(str, Enum):
     daily_schedule = "daily_schedule"
     ics_reminder = "ics_reminder"
     manual = "manual"
+    daily_digest = "daily_digest"
 
 
 class AckAction(str, Enum):
@@ -55,6 +56,12 @@ class User(Base):
     api_key: Mapped[str] = mapped_column(String, unique=True, index=True, default=_api_key)
     timezone: Mapped[str] = mapped_column(String, default="UTC")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+    # Criterion #3: a once-a-day "here's what's coming up" summary, sent at `digest_time`
+    # (user's local timezone) if there's at least one appointment that day. See
+    # app/scheduler/digest.py.
+    digest_enabled: Mapped[bool] = mapped_column(default=False)
+    digest_time: Mapped[str | None] = mapped_column(String, nullable=True)  # "HH:MM", 24h, local tz
 
     daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")

@@ -23,3 +23,16 @@ def create_user(payload: schemas.UserCreate, db: Session = Depends(get_db)) -> U
 @router.get("/me", response_model=schemas.UserOut)
 def get_me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.patch("/me", response_model=schemas.UserOut)
+def update_me(
+    payload: schemas.UserUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(user, key, value)
+    db.commit()
+    db.refresh(user)
+    return user
