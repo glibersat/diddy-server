@@ -101,6 +101,19 @@ Four APScheduler jobs (`AsyncIOScheduler`, started/stopped in `app/main.py`'s li
 Decide-it's-due (`daily.py`, `ics.py`) and deliver-it (`dispatcher.py`) are deliberately separate
 jobs talking only through the `Notification` table — this is the seam future rule types use.
 
+**Known gap: no `cancel` on edit/delete of an already-pushed schedule.** Because occurrences are
+now enqueued and pushed (as `schedule`) well ahead of their fire time, a `PATCH`/`DELETE` on a
+`DailySchedule` or `IcsSource` (`app/routers/schedules.py`, `app/routers/ics_sources.py`) can
+land *after* the watch already has the old version stored. `dispatcher.py::send_cancel` exists as
+a primitive for this (sends `{"type": "cancel", "notification_id": ...}`, see
+`companion-android/docs/backend-protocol.md`), but nothing calls it yet — the update/delete
+handlers don't look up affected `pending`/`sent` `Notification` rows and cancel them. Today the
+watch just keeps the stale entry until it fires as originally scheduled (or a later `schedule`
+with the same `notification_id` happens to replace it, which won't occur for a genuinely deleted
+schedule). Wiring this up means: on `PATCH`/`DELETE`, query `Notification` rows for that
+`rule_type`/`rule_id` still `pending` or `sent`-but-not-yet-due, call `send_cancel` on each, and
+decide whether to delete or re-enqueue them depending on whether the rule was edited vs removed.
+
 Known sharp edge already hit once and fixed: SQLite round-trips lose Python `datetime` tzinfo and
 plain-`String` enum columns lose their Python enum wrapper on any re-query/refresh. Don't do
 naive `datetime` arithmetic or call `.value` on a column typed `Mapped[SomeStrEnum] =
