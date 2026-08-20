@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { clearApiKey, getApiKey } from './api'
+import { clearApiKey, getApiKey, ringPhone } from './api'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,6 +9,7 @@ const loggedIn = ref(!!getApiKey())
 const apiKey = computed(() => getApiKey() ?? '')
 const keyRevealed = ref(false)
 const copied = ref(false)
+const ringStatus = ref<'idle' | 'ringing' | 'unreachable'>('idle')
 
 const showNav = computed(() => route.name !== 'login')
 
@@ -16,6 +17,18 @@ function logout() {
   clearApiKey()
   loggedIn.value = false
   router.push({ name: 'login' })
+}
+
+async function ring() {
+  ringStatus.value = 'ringing'
+  try {
+    const delivered = await ringPhone()
+    ringStatus.value = delivered ? 'ringing' : 'unreachable'
+  } catch (e) {
+    ringStatus.value = 'unreachable'
+  } finally {
+    setTimeout(() => (ringStatus.value = 'idle'), 2000)
+  }
 }
 
 async function copyKey() {
@@ -63,6 +76,14 @@ async function copyKey() {
             Heart Rate
           </RouterLink>
         </nav>
+        <button
+          type="button"
+          class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-4 py-2 cursor-pointer disabled:opacity-60"
+          :disabled="ringStatus === 'ringing'"
+          @click="ring"
+        >
+          {{ ringStatus === 'ringing' ? 'Ringing…' : ringStatus === 'unreachable' ? 'Phone unreachable' : 'Ring phone' }}
+        </button>
         <button
           class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-4 py-2 cursor-pointer"
           @click="logout"

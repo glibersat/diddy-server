@@ -179,6 +179,10 @@ class NextReminderOut(BaseModel):
     scheduled_for: datetime
 
 
+class RingPhoneOut(BaseModel):
+    delivered: bool
+
+
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

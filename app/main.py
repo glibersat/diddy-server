@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import heart_rate, ics_sources, notifications, schedules, users, ws
+from app.routers import heart_rate, ics_sources, notifications, phone, schedules, users, ws
 from app.scheduler.jobs import build_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +36,7 @@ app.include_router(schedules.router)
 app.include_router(ics_sources.router)
 app.include_router(notifications.router)
 app.include_router(heart_rate.router)
+app.include_router(phone.router)
 app.include_router(ws.router)
 
 

@@ -171,3 +171,8 @@ export async function updateIcsSource(
 export async function deleteIcsSource(id: string): Promise<void> {
   await client.delete(`/ics-sources/${id}`)
 }
+
+export async function ringPhone(): Promise<boolean> {
+  const { data } = await client.post<{ delivered: boolean }>('/phone/ring')
+  return data.delivered
+}
