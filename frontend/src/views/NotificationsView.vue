@@ -15,7 +15,7 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [notifs, next] = await Promise.all([listNotifications(), getNextNotification()])
+    const [notifs, next] = await Promise.all([listNotifications(20), getNextNotification()])
     notifications.value = notifs
     nextUp.value = next
   } catch (e) {
@@ -27,20 +27,15 @@ async function refresh() {
 
 onMounted(refresh)
 
-const MAX_VISIBLE = 20
-
 const visible = computed(() => {
-  if (mode.value === 'snoozed') {
-    return notifications.value.filter((n) => n.ack_action === 'snoozed').slice(0, MAX_VISIBLE)
-  }
+  if (mode.value === 'snoozed') return notifications.value.filter((n) => n.ack_action === 'snoozed')
   if (mode.value === 'delivered') {
     return notifications.value
       .filter((n) => n.delivered_at)
       .slice()
       .sort((a, b) => new Date(b.delivered_at!).getTime() - new Date(a.delivered_at!).getTime())
-      .slice(0, MAX_VISIBLE)
   }
-  return notifications.value.slice(0, MAX_VISIBLE)
+  return notifications.value
 })
 
 function formatDateTime(iso: string | null): string {

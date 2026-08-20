@@ -93,8 +93,8 @@ export interface NextReminder {
   scheduled_for: string
 }
 
-export async function listNotifications(): Promise<Notification[]> {
-  const { data } = await client.get<Notification[]>('/notifications')
+export async function listNotifications(limit?: number): Promise<Notification[]> {
+  const { data } = await client.get<Notification[]>('/notifications', { params: { limit } })
   return data
 }
 
