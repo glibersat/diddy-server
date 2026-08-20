@@ -172,6 +172,32 @@ export async function deleteIcsSource(id: string): Promise<void> {
   await client.delete(`/ics-sources/${id}`)
 }
 
+export interface PhoneLocation {
+  id: string
+  latitude: number
+  longitude: number
+  accuracy_m: number | null
+  recorded_at: string
+}
+
+export async function listLocations(since: Date, until: Date): Promise<PhoneLocation[]> {
+  const { data } = await client.get<PhoneLocation[]>('/location', {
+    params: { since: since.toISOString(), until: until.toISOString() },
+  })
+  return data
+}
+
+/** Null if the phone has never reported a position. */
+export async function getLatestLocation(): Promise<PhoneLocation | null> {
+  try {
+    const { data } = await client.get<PhoneLocation>('/location/latest')
+    return data
+  } catch (e: any) {
+    if (e?.response?.status === 404) return null
+    throw e
+  }
+}
+
 export async function ringPhone(): Promise<boolean> {
   const { data } = await client.post<{ delivered: boolean }>('/phone/ring')
   return data.delivered

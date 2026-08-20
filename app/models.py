@@ -164,3 +164,22 @@ class HeartRateReading(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
     user: Mapped["User"] = relationship()
+
+
+class PhoneLocation(Base):
+    """One `location` message from the companion app - see
+    companion-android/docs/backend-protocol.md. Reported roughly every two minutes while the app
+    is running, for "where's my phone" - not a continuous track, just periodic samples."""
+
+    __tablename__ = "phone_locations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    latitude: Mapped[float] = mapped_column()
+    longitude: Mapped[float] = mapped_column()
+    accuracy_m: Mapped[float | None] = mapped_column(nullable=True)
+    # Stamped by the phone on receipt, same convention as HeartRateReading.recorded_at.
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+    user: Mapped["User"] = relationship()

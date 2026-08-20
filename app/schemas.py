@@ -169,6 +169,28 @@ class HeartRateReadingOut(BaseModel):
     recorded_at: datetime
 
 
+class LocationMessage(BaseModel):
+    """Inbound WS message, one per periodic position sample the companion app reports - see
+    companion-android/docs/backend-protocol.md. `timestamp` is milliseconds since epoch, stamped
+    by the phone on receipt, same convention as `HeartRateMessage`."""
+
+    type: str
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy: float | None = None
+    timestamp: int
+
+
+class PhoneLocationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    latitude: float
+    longitude: float
+    accuracy_m: float | None
+    recorded_at: datetime
+
+
 class NextReminderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
