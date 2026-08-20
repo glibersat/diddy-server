@@ -85,7 +85,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location ~ ^/(schedules|ics-sources|notifications|heart-rate|phone|health)(/|$) {
+    location ~ ^/(schedules|ics-sources|notifications|heart-rate|location|phone|health)(/|$) {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
