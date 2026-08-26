@@ -27,5 +27,14 @@ class Settings(BaseSettings):
     # it can stay short.
     delivery_timeout_seconds: int = 20
 
+    # The server's own Signal identity, used to message wearers (see app/notify/signal.py) - set
+    # up with the `diddy-signal` CLI (app/cli/signal.py: `link` to join an existing account as a
+    # secondary device, or `register`/`verify` for a brand new number). Signal messaging is a
+    # no-op for any user until this is set, regardless of that user's own `signal_number`.
+    signal_account: str | None = None
+    signal_cli_bin: str = "signal-cli"
+    # Defaults to signal-cli's own default (~/.local/share/signal-cli) when unset.
+    signal_cli_config_dir: str | None = None
+
 
 settings = Settings()

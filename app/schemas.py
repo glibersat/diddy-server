@@ -40,12 +40,16 @@ class UserOut(BaseModel):
     timezone: str
     digest_enabled: bool
     digest_time: str | None
+    signal_number: str | None
 
 
 class UserUpdate(BaseModel):
     timezone: str | None = None
     digest_enabled: bool | None = None
     digest_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # E.164, e.g. +15551234567 - what app/notify/signal.py sends to. Explicit null clears it,
+    # same convention as every other optional field here (omitted key = unchanged).
+    signal_number: str | None = Field(default=None, pattern=r"^\+[1-9]\d{6,14}$")
 
 
 class _ReminderOptionsMixin(BaseModel):

@@ -23,6 +23,23 @@ so unacked triggers are automatically resent (`DIDDY_ACK_TIMEOUT_SECONDS`, cappe
 `rule_type` + `dedupe_key` on the `Notification` table is the seam a future rule type (e.g. a
 GenAI daily-summary job) plugs into without touching delivery.
 
+### Signal messaging
+
+Any user with a `signal_number` set (`PATCH /users/me`) also gets every notification as a Signal
+message, sent alongside (not instead of) the watch trigger - see `app/notify/signal.py`. It needs
+[signal-cli](https://github.com/AsamK/signal-cli) installed and a Signal account for the server
+itself, set up with the bundled CLI:
+
+```bash
+uv run diddy-signal link          # link as a secondary device (no CAPTCHA) - scan the printed QR
+uv run diddy-signal status        # confirm it registered
+uv run diddy-signal send +15559876543 "test"   # optional smoke test
+```
+
+Then set `DIDDY_SIGNAL_ACCOUNT` to the linked number in `.env`. See `uv run diddy-signal --help`
+for registering a brand new number instead of linking an existing account. Signal messaging is
+inert (skipped, not an error) for any user until `DIDDY_SIGNAL_ACCOUNT` is set.
+
 ## Running
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/):

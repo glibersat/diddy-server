@@ -64,6 +64,11 @@ class User(Base):
     digest_enabled: Mapped[bool] = mapped_column(default=False)
     digest_time: Mapped[str | None] = mapped_column(String, nullable=True)  # "HH:MM", 24h, local tz
 
+    # E.164 number to message via Signal alongside (not instead of) the watch trigger - see
+    # app/notify/signal.py. Unset means this user doesn't get Signal messages, regardless of
+    # whether the server has a Signal account configured (app/config.py::signal_account).
+    signal_number: Mapped[str | None] = mapped_column(String, nullable=True)
+
     daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     todo_lists: Mapped[list["TodoList"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -168,6 +173,12 @@ class Notification(Base):
     is the stronger signal: the phone's BLE write of the Trigger characteristic actually completed,
     reported back as a `delivered` message. `status` still tracks the wearer's snooze/dismiss `ack`
     on top of that, since delivery to the watch and the wearer acting on it are different things.
+
+    `signal_sent_at` tracks a second, independent channel (see app/notify/signal.py) - a Signal
+    message sent alongside the watch trigger, not instead of it. It's unrelated to `status`: a
+    watch-trigger resend (`requeue_undelivered`/`requeue_unacked` flipping this row back to
+    `pending`) must not re-text the wearer every time, so `signal_sent_at` being set is a
+    standalone "already tried Signal for this row" guard, checked once and never cleared.
     """
 
     __tablename__ = "notifications"
@@ -196,7 +207,11 @@ class Notification(Base):
     ack_snoozed_minutes: Mapped[int | None] = mapped_column(nullable=True)
     acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    signal_sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+    user: Mapped["User"] = relationship()
 
 
 class HeartRateReading(Base):

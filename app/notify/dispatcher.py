@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Notification, NotificationStatus
 from app.notify.connection_manager import manager
+from app.notify.signal import send_signal_message
 
 logger = logging.getLogger("diddy.notify.dispatcher")
 
@@ -23,7 +24,9 @@ def _trigger_payload(notification: Notification) -> dict:
 
 
 async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
-    """Send every `pending` Notification as a `trigger` over its user's companion WebSocket.
+    """Send every `pending` Notification as a `trigger` over its user's companion WebSocket, and
+    (once, regardless of how the watch trigger went) as a Signal message if the user has a
+    `signal_number` set - see Notification.signal_sent_at and app/notify/signal.py.
 
     A successful send only means the phone received it - not that the watch showed it, and
     definitely not that the wearer acted on it. `requeue_unacked` is what handles that gap.
@@ -46,6 +49,10 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
             notification.status = NotificationStatus.failed
             notification.error = "No connected device after max_send_attempts"
         # else: stays `pending`, picked up again on the next dispatch tick
+
+        if notification.signal_sent_at is None and notification.user.signal_number:
+            await send_signal_message(notification.user.signal_number, f"{notification.title}\n{notification.body}")
+            notification.signal_sent_at = now
     db.commit()
     return len(pending)
 
