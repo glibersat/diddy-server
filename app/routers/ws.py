@@ -8,6 +8,7 @@ from app.models import AckAction, User
 from app.notify.ack import record_ack, record_delivered
 from app.notify.connection_manager import manager
 from app.notify.dispatcher import resend_now
+from app.notify.geofence import check_todo_list_geofences
 from app.notify.heart_rate import record_heart_rate
 from app.notify.location import record_location
 from app.schemas import AckMessage, DeliveredMessage, HeartRateMessage, LocationMessage, WatchReadyMessage
@@ -74,9 +75,10 @@ async def companion_ws(websocket: WebSocket, api_key: str) -> None:
                     logger.info("Ignoring malformed message from user %s: %r", user.id, raw)
                     continue
                 with SessionLocal() as db:
-                    record_location(
+                    location = record_location(
                         db, user.id, message.latitude, message.longitude, message.accuracy, message.timestamp
                     )
+                    check_todo_list_geofences(db, user.id, location)
             else:
                 logger.info("Ignoring unrecognized message from user %s: %r", user.id, raw)
     except WebSocketDisconnect:

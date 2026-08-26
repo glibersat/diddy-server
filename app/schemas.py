@@ -5,17 +5,25 @@ from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, mode
 from app.models import AckAction, NotificationStatus, ReminderKind, RuleType
 
 
-def _validate_ics_url(value: str) -> str:
-    """Reject anything but a remote http(s) URL - `fetch_ics_text` used to also accept a local
-    file path, which let a self-registered user make the server read arbitrary files off its own
-    disk (or hit internal-only URLs). See app/scheduler/ics.py::fetch_ics_text."""
+def _validate_http_url(value: str, field_name: str) -> str:
+    """Reject anything but a remote http(s) URL - a local file path (or worse, an internal-only
+    URL) would let a self-registered user make the server read files it has no business reading.
+    See app/scheduler/ics.py::fetch_ics_text and app/scheduler/todo.py::fetch_todo_components."""
     try:
         scheme = AnyUrl(value).scheme
     except Exception as e:
-        raise ValueError("url_or_path must be a valid http(s) URL") from e
+        raise ValueError(f"{field_name} must be a valid http(s) URL") from e
     if scheme not in ("http", "https"):
-        raise ValueError("url_or_path must be a valid http(s) URL")
+        raise ValueError(f"{field_name} must be a valid http(s) URL")
     return value
+
+
+def _validate_ics_url(value: str) -> str:
+    return _validate_http_url(value, "url_or_path")
+
+
+def _validate_caldav_url(value: str) -> str:
+    return _validate_http_url(value, "caldav_url")
 
 
 class UserCreate(BaseModel):
@@ -126,6 +134,93 @@ class IcsSourceOut(BaseModel):
     kind: ReminderKind
     dismissible: bool
     snooze_minutes: list[int]
+
+
+class _PlaceMixin(BaseModel):
+    """A todo list's optional geofence: all three fields are set together or not at all - see
+    app/notify/geofence.py. `place_radius_m` is picked in 100m steps (the frontend's map picker
+    offers a slider from 100-5000m), matching how imprecise a phone's periodic position sample
+    already is."""
+
+    place_label: str | None = None
+    place_latitude: float | None = Field(default=None, ge=-90, le=90)
+    place_longitude: float | None = Field(default=None, ge=-180, le=180)
+    place_radius_m: int | None = Field(default=None, ge=100, le=5000, multiple_of=100)
+
+    @model_validator(mode="after")
+    def _check_place_complete(self) -> "_PlaceMixin":
+        fields = (self.place_latitude, self.place_longitude, self.place_radius_m)
+        if any(f is not None for f in fields) and not all(f is not None for f in fields):
+            raise ValueError("place_latitude, place_longitude and place_radius_m must be set together")
+        return self
+
+
+class TodoListCreate(_ReminderOptionsMixin, _PlaceMixin):
+    name: str
+    caldav_url: str
+    username: str | None = None
+    password: str | None = None
+    refresh_minutes: int = 15
+    enabled: bool = True
+    kind: ReminderKind = ReminderKind.generic
+    dismissible: bool = True
+    snooze_minutes: list[int] = Field(default_factory=list, max_length=3)
+
+    _validate_url = field_validator("caldav_url")(_validate_caldav_url)
+
+
+class TodoListUpdate(BaseModel):
+    name: str | None = None
+    caldav_url: str | None = None
+    username: str | None = None
+    password: str | None = None
+    refresh_minutes: int | None = None
+    enabled: bool | None = None
+    kind: ReminderKind | None = None
+    dismissible: bool | None = None
+    snooze_minutes: list[int] | None = Field(default=None, max_length=3)
+    place_label: str | None = None
+    place_latitude: float | None = Field(default=None, ge=-90, le=90)
+    place_longitude: float | None = Field(default=None, ge=-180, le=180)
+    place_radius_m: int | None = Field(default=None, ge=100, le=5000, multiple_of=100)
+    clear_place: bool = False  # explicit opt-in to drop an existing place, since None here means "unchanged"
+
+    @field_validator("caldav_url")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_caldav_url(value)
+
+
+class TodoListOut(BaseModel):
+    """Deliberately excludes `password` - this goes straight to the frontend and there's no
+    reason for it to ever leave the server once saved."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    caldav_url: str
+    username: str | None
+    refresh_minutes: int
+    enabled: bool
+    last_synced_at: datetime | None
+    place_label: str | None
+    place_latitude: float | None
+    place_longitude: float | None
+    place_radius_m: int | None
+    kind: ReminderKind
+    dismissible: bool
+    snooze_minutes: list[int]
+
+
+class TodoItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    uid: str
+    summary: str
+    due: datetime | None
+    completed: bool
 
 
 class AckMessage(BaseModel):

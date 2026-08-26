@@ -41,6 +41,7 @@ class RuleType(str, Enum):
     ics_reminder = "ics_reminder"
     manual = "manual"
     daily_digest = "daily_digest"
+    place_arrival = "place_arrival"
 
 
 class AckAction(str, Enum):
@@ -65,6 +66,7 @@ class User(Base):
 
     daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    todo_lists: Mapped[list["TodoList"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class DailySchedule(Base):
@@ -104,6 +106,58 @@ class IcsSource(Base):
     snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
 
     user: Mapped["User"] = relationship(back_populates="ics_sources")
+
+
+class TodoList(Base):
+    """A CalDAV calendar's VTODOs, synced periodically (see app/scheduler/todo.py). Optionally
+    tied to a place: once set, a `place_arrival` reminder fires the first time the phone's
+    reported location comes within `place_radius_m` of it (see app/notify/geofence.py) -
+    e.g. a shopping list that reminds you when you're near the store."""
+
+    __tablename__ = "todo_lists"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
+    caldav_url: Mapped[str] = mapped_column(String)
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    password: Mapped[str | None] = mapped_column(String, nullable=True)
+    refresh_minutes: Mapped[int] = mapped_column(default=15)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    place_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    place_latitude: Mapped[float | None] = mapped_column(nullable=True)
+    place_longitude: Mapped[float | None] = mapped_column(nullable=True)
+    place_radius_m: Mapped[int | None] = mapped_column(nullable=True)
+    # True while the phone's last-known position was inside place_radius_m. A `place_arrival`
+    # reminder fires on the False -> True transition only; staying inside (or never entering)
+    # doesn't re-fire, and leaving resets this so the next entry fires again.
+    place_inside: Mapped[bool] = mapped_column(default=False)
+
+    kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.generic)
+    dismissible: Mapped[bool] = mapped_column(default=True)
+    snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
+
+    user: Mapped["User"] = relationship(back_populates="todo_lists")
+    items: Mapped[list["TodoItem"]] = relationship(back_populates="todo_list", cascade="all, delete-orphan")
+
+
+class TodoItem(Base):
+    """One VTODO synced from a TodoList's CalDAV calendar - re-fetched wholesale each sync tick
+    and upserted by `uid`, same convention as IcsSource's VEVENTs (see app/scheduler/todo.py)."""
+
+    __tablename__ = "todo_items"
+    __table_args__ = (UniqueConstraint("todo_list_id", "uid", name="uq_todo_item_list_uid"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    todo_list_id: Mapped[str] = mapped_column(ForeignKey("todo_lists.id"), index=True)
+    uid: Mapped[str] = mapped_column(String)
+    summary: Mapped[str] = mapped_column(String)
+    due: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    completed: Mapped[bool] = mapped_column(default=False)
+
+    todo_list: Mapped["TodoList"] = relationship(back_populates="items")
 
 
 class Notification(Base):

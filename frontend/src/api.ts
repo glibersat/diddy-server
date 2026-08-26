@@ -62,12 +62,57 @@ export interface IcsSource {
 
 export type IcsSourceInput = Omit<IcsSource, 'id' | 'last_synced_at'>
 
+export interface TodoList {
+  id: string
+  name: string
+  caldav_url: string
+  username: string | null
+  refresh_minutes: number
+  enabled: boolean
+  last_synced_at: string | null
+  place_label: string | null
+  place_latitude: number | null
+  place_longitude: number | null
+  place_radius_m: number | null
+  kind: ReminderKind
+  dismissible: boolean
+  snooze_minutes: number[]
+}
+
+/** `password` is write-only - TodoList (the API response) never includes it back, see
+ * app/schemas.py::TodoListOut. */
+export interface TodoListInput {
+  name: string
+  caldav_url: string
+  username: string
+  password: string
+  refresh_minutes: number
+  enabled: boolean
+  place_label: string | null
+  place_latitude: number | null
+  place_longitude: number | null
+  place_radius_m: number | null
+  kind: ReminderKind
+  dismissible: boolean
+  snooze_minutes: number[]
+}
+
+export interface TodoItem {
+  id: string
+  uid: string
+  summary: string
+  due: string | null
+  completed: boolean
+}
+
 export type NotificationStatus = 'pending' | 'sent' | 'acked' | 'failed'
 export type AckAction = 'snoozed' | 'dismissed'
 
+export type RuleType = 'daily_schedule' | 'ics_reminder' | 'manual' | 'daily_digest' | 'place_arrival'
+
 export interface Notification {
   id: string
-  rule_type: 'daily_schedule' | 'ics_reminder'
+  rule_type: RuleType
   rule_id: string
   scheduled_for: string
   title: string
@@ -86,7 +131,7 @@ export interface Notification {
 }
 
 export interface NextReminder {
-  rule_type: 'daily_schedule' | 'ics_reminder'
+  rule_type: RuleType
   title: string
   body: string
   kind: ReminderKind
@@ -170,6 +215,36 @@ export async function updateIcsSource(
 
 export async function deleteIcsSource(id: string): Promise<void> {
   await client.delete(`/ics-sources/${id}`)
+}
+
+export async function listTodoLists(): Promise<TodoList[]> {
+  const { data } = await client.get<TodoList[]>('/todo-lists')
+  return data
+}
+
+export async function createTodoList(input: TodoListInput): Promise<TodoList> {
+  const { data } = await client.post<TodoList>('/todo-lists', input)
+  return data
+}
+
+/** Pass `clearPlace: true` to drop an existing place - omitting the place fields otherwise
+ * leaves them unchanged, see app/schemas.py::TodoListUpdate. */
+export async function updateTodoList(
+  id: string,
+  input: Partial<TodoListInput>,
+  clearPlace = false,
+): Promise<TodoList> {
+  const { data } = await client.patch<TodoList>(`/todo-lists/${id}`, { ...input, clear_place: clearPlace })
+  return data
+}
+
+export async function deleteTodoList(id: string): Promise<void> {
+  await client.delete(`/todo-lists/${id}`)
+}
+
+export async function listTodoItems(id: string): Promise<TodoItem[]> {
+  const { data } = await client.get<TodoItem[]>(`/todo-lists/${id}/items`)
+  return data
 }
 
 export interface PhoneLocation {

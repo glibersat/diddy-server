@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     daily_tick_seconds: int = 60
     ics_refresh_seconds: int = 300
+    todo_refresh_seconds: int = 300
     dispatch_tick_seconds: int = 15
 
     # A `trigger` over the companion WebSocket is fire-and-forget: no delivery guarantee, and no

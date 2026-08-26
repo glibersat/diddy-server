@@ -8,6 +8,7 @@ from app.notify.dispatcher import dispatch_pending, requeue_unacked, requeue_und
 from app.scheduler.daily import run_daily_schedule_tick
 from app.scheduler.digest import run_digest_tick
 from app.scheduler.ics import run_all_ics_ticks
+from app.scheduler.todo import run_all_todo_ticks
 
 logger = logging.getLogger("diddy.scheduler")
 
@@ -25,6 +26,11 @@ def _digest_tick() -> None:
 def _ics_tick() -> None:
     with SessionLocal() as db:
         run_all_ics_ticks(db)
+
+
+def _todo_tick() -> None:
+    with SessionLocal() as db:
+        run_all_todo_ticks(db)
 
 
 async def _dispatch_tick() -> None:
@@ -47,6 +53,7 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(_daily_tick, "interval", seconds=settings.daily_tick_seconds, id="daily_tick")
     scheduler.add_job(_digest_tick, "interval", seconds=settings.daily_tick_seconds, id="digest_tick")
     scheduler.add_job(_ics_tick, "interval", seconds=settings.ics_refresh_seconds, id="ics_tick")
+    scheduler.add_job(_todo_tick, "interval", seconds=settings.todo_refresh_seconds, id="todo_tick")
     scheduler.add_job(_dispatch_tick, "interval", seconds=settings.dispatch_tick_seconds, id="dispatch_tick")
     scheduler.add_job(
         _requeue_tick, "interval", seconds=settings.dispatch_tick_seconds, id="requeue_tick"

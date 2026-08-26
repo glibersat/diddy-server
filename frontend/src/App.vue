@@ -49,6 +49,13 @@ async function copyKey() {
             ICS Sources
           </RouterLink>
           <RouterLink
+            to="/todo-lists"
+            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
+            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
+          >
+            Todo Lists
+          </RouterLink>
+          <RouterLink
             to="/notifications"
             class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
             active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"

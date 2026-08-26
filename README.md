@@ -6,6 +6,11 @@ Per-user notification backend for ADHD-friendly watch reminders. Two criteria to
   your meds".
 - **ICS reminders** (`/ics-sources`) — parse a personal ICS export and remind N minutes before
   each event.
+- **Todo lists** (`/todo-lists`) — sync a CalDAV calendar's VTODOs, optionally tied to a place
+  (lat/lng + radius, in 100m steps): the first time the phone's reported location comes within
+  that radius, a reminder fires listing the list's pending items - e.g. a shopping list that
+  nudges you once you're near the store. See `app/scheduler/todo.py` (sync) and
+  `app/notify/geofence.py` (the arrival check, run against every `location` message over the WS).
 
 Delivery follows the companion app's protocol
 (`../companion-android/docs/backend-protocol.md`, mirroring InfiniTime's BLE
@@ -71,6 +76,8 @@ uv run pytest
 - `GET /users/me`
 - `POST/GET/PATCH/DELETE /schedules` — daily schedules
 - `POST/GET/PATCH/DELETE /ics-sources` — ICS reminder sources
+- `POST/GET/PATCH/DELETE /todo-lists` — CalDAV todo lists, `GET /todo-lists/{id}/items` for the
+  last-synced items
 - `GET /notifications` — outbox/audit log, including ack status
 - `GET /heart-rate?since=...&until=...` — bpm readings from the watch, optionally windowed
 - `WS /ws?api_key=...` — companion app connection: receives `trigger`, sends `ack`/`delivered`/`heart_rate`
