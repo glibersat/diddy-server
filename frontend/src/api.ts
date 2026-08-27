@@ -33,6 +33,18 @@ export interface User {
   email: string
   api_key: string
   timezone: string
+  digest_enabled: boolean
+  digest_time: string | null
+  /** E.164, e.g. +15551234567 - set to also get notifications as a Signal message, see
+   * app/notify/signal.py. Null means Signal messaging is off for this user. */
+  signal_number: string | null
+}
+
+export interface UserSettingsInput {
+  timezone?: string
+  digest_enabled?: boolean
+  digest_time?: string | null
+  signal_number?: string | null
 }
 
 export interface DailySchedule {
@@ -170,6 +182,11 @@ export async function createUser(email: string, timezone: string): Promise<User>
 
 export async function getMe(): Promise<User> {
   const { data } = await client.get<User>('/users/me')
+  return data
+}
+
+export async function updateMe(input: UserSettingsInput): Promise<User> {
+  const { data } = await client.patch<User>('/users/me', input)
   return data
 }
 
