@@ -7,10 +7,10 @@ a lookahead window - and unlike daily.py/ics.py, sends nothing at all if there's
 from datetime import datetime, time, timedelta, UTC
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import IcsSource, Notification, ReminderKind, RuleType, User
+from app.models import IcsSource, NotificationChannel, ReminderKind, RuleType, User
+from app.notify.queue import enqueue_notification
 from app.scheduler import ics
 
 MAX_LISTED = 5  # keep the body short enough for the watch's screen
@@ -61,22 +61,19 @@ def run_digest_tick(db: Session, now: datetime | None = None) -> int:
             continue
 
         dedupe_key = f"digest:{user.id}:{local_now.date().isoformat()}"
-        notification = Notification(
-            user_id=user.id,
+        notification = enqueue_notification(
+            db,
+            user.id,
             rule_type=RuleType.daily_digest,
             rule_id=user.id,
             dedupe_key=dedupe_key,
-            scheduled_for=now,
             title="Today's schedule",
             body=_format_body(appointments, tz),
+            channel=NotificationChannel.alert,
             kind=ReminderKind.generic,
             dismissible=True,
             snooze_minutes=[],
         )
-        db.add(notification)
-        try:
-            db.commit()
+        if notification is not None:  # None means already enqueued this minute/day, e.g. after a restart
             created += 1
-        except IntegrityError:
-            db.rollback()  # already enqueued this minute/day, e.g. after a restart
     return created
