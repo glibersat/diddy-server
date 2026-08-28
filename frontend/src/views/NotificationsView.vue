@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { getNextNotification, listNotifications, type NextReminder, type Notification } from '../api'
+import { getNextNotification, listNotifications, sendAlert, type NextReminder, type Notification } from '../api'
 import { card, muted } from '../ui'
 
 type ViewMode = 'snoozed' | 'delivered' | 'all'
@@ -10,6 +10,20 @@ const nextUp = ref<NextReminder | null>(null)
 const loading = ref(true)
 const error = ref('')
 const mode = ref<ViewMode>('snoozed')
+
+const testAlertStatus = ref<'idle' | 'sending' | 'sent' | 'unreachable'>('idle')
+
+async function sendTestAlert() {
+  testAlertStatus.value = 'sending'
+  try {
+    const delivered = await sendAlert('Test alert from the web UI')
+    testAlertStatus.value = delivered ? 'sent' : 'unreachable'
+  } catch (e) {
+    testAlertStatus.value = 'unreachable'
+  } finally {
+    setTimeout(() => (testAlertStatus.value = 'idle'), 2000)
+  }
+}
 
 async function refresh() {
   loading.value = true
@@ -69,13 +83,31 @@ function formatRetrigger(n: Notification): string {
 
 <template>
   <div>
-    <div class="flex justify-between items-center">
+    <div class="flex justify-between items-center flex-wrap gap-3">
       <h2 class="text-base font-semibold">Notifications</h2>
-      <select v-model="mode" class="text-sm w-auto">
-        <option value="snoozed">Snoozed</option>
-        <option value="delivered">Delivered</option>
-        <option value="all">All</option>
-      </select>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          class="rounded-md px-3 py-1.5 text-sm bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 disabled:opacity-60"
+          :disabled="testAlertStatus === 'sending'"
+          @click="sendTestAlert"
+        >
+          {{
+            testAlertStatus === 'sending'
+              ? 'Sending…'
+              : testAlertStatus === 'sent'
+                ? 'Sent!'
+                : testAlertStatus === 'unreachable'
+                  ? 'Phone unreachable'
+                  : 'Send test alert'
+          }}
+        </button>
+        <select v-model="mode" class="text-sm w-auto">
+          <option value="snoozed">Snoozed</option>
+          <option value="delivered">Delivered</option>
+          <option value="all">All</option>
+        </select>
+      </div>
     </div>
     <p :class="[muted, 'mb-4']">Outbox of everything sent to the watch, most recent first.</p>
 
