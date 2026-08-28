@@ -169,6 +169,19 @@ class TodoListCreate(_ReminderOptionsMixin, _PlaceMixin):
     _validate_url = field_validator("caldav_url")(_validate_caldav_url)
 
 
+class TodoListConnectionTest(BaseModel):
+    caldav_url: str
+    username: str | None = None
+    password: str | None = None
+
+    _validate_url = field_validator("caldav_url")(_validate_caldav_url)
+
+
+class TodoListConnectionResult(BaseModel):
+    ok: bool
+    detail: str | None = None
+
+
 class TodoListUpdate(BaseModel):
     name: str | None = None
     caldav_url: str | None = None

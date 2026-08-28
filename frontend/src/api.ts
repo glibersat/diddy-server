@@ -231,6 +231,24 @@ export async function createTodoList(input: TodoListInput): Promise<TodoList> {
   return data
 }
 
+export interface TodoListConnectionResult {
+  ok: boolean
+  detail: string | null
+}
+
+export async function testTodoListConnection(
+  caldav_url: string,
+  username: string | null,
+  password: string | null,
+): Promise<TodoListConnectionResult> {
+  const { data } = await client.post<TodoListConnectionResult>('/todo-lists/test-connection', {
+    caldav_url,
+    username,
+    password,
+  })
+  return data
+}
+
 /** Pass `clearPlace: true` to drop an existing place - omitting the place fields otherwise
  * leaves them unchanged, see app/schemas.py::TodoListUpdate. */
 export async function updateTodoList(

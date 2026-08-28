@@ -10,6 +10,7 @@ import {
   deleteTodoList,
   listTodoItems,
   listTodoLists,
+  testTodoListConnection,
   updateTodoList,
   type ReminderKind,
   type TodoItem,
@@ -146,6 +147,8 @@ async function startCreate() {
   Object.assign(form, blankForm())
   editingId.value = null
   showForm.value = true
+  testStatus.value = 'idle'
+  testDetail.value = ''
   pickerMap?.remove()
   pickerMap = null
   pickerMarker = null
@@ -172,6 +175,8 @@ async function startEdit(l: TodoList) {
   })
   editingId.value = l.id
   showForm.value = true
+  testStatus.value = 'idle'
+  testDetail.value = ''
   pickerMap?.remove()
   pickerMap = null
   pickerMarker = null
@@ -183,6 +188,22 @@ async function startEdit(l: TodoList) {
 function cancelForm() {
   showForm.value = false
   editingId.value = null
+}
+
+const testStatus = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
+const testDetail = ref('')
+
+async function testConnection() {
+  testStatus.value = 'testing'
+  testDetail.value = ''
+  try {
+    const result = await testTodoListConnection(form.caldav_url, form.username || null, form.password || null)
+    testStatus.value = result.ok ? 'ok' : 'failed'
+    testDetail.value = result.detail ?? ''
+  } catch (e: any) {
+    testStatus.value = 'failed'
+    testDetail.value = e?.response?.data?.detail ?? 'Could not reach the server'
+  }
 }
 
 async function submitForm() {
@@ -291,6 +312,17 @@ function formatSynced(iso: string | null): string {
             />
           </div>
           <div>
+            <label :class="label">&nbsp;</label>
+            <button
+              type="button"
+              :class="[btnSecondary, 'block']"
+              :disabled="!form.caldav_url || testStatus === 'testing'"
+              @click="testConnection"
+            >
+              {{ testStatus === 'testing' ? 'Testing…' : 'Test connection' }}
+            </button>
+          </div>
+          <div>
             <label for="refresh" :class="label">Refresh every (minutes)</label>
             <input
               id="refresh"
@@ -302,6 +334,9 @@ function formatSynced(iso: string | null): string {
             />
           </div>
         </div>
+
+        <p v-if="testStatus === 'ok'" class="text-sm text-green-600 dark:text-green-400">Connected successfully.</p>
+        <p v-else-if="testStatus === 'failed'" :class="errorText">Could not connect{{ testDetail ? `: ${testDetail}` : '' }}</p>
 
         <div>
           <div class="flex justify-between items-center mb-1">

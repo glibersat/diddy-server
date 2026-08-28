@@ -5,6 +5,7 @@ from app import schemas
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import TodoItem, TodoList, User
+from app.scheduler.todo import fetch_todo_components
 
 router = APIRouter(prefix="/todo-lists", tags=["todo-lists"])
 
@@ -14,6 +15,22 @@ def _get_owned(db: Session, user: User, list_id: str) -> TodoList:
     if not todo_list:
         raise HTTPException(404, "Todo list not found")
     return todo_list
+
+
+@router.post("/test-connection", response_model=schemas.TodoListConnectionResult)
+def test_connection(
+    payload: schemas.TodoListConnectionTest,
+    user: User = Depends(get_current_user),
+) -> schemas.TodoListConnectionResult:
+    """Try the CalDAV credentials/URL a user is about to save, without persisting anything -
+    lets the form catch a typo'd URL or bad password before the first sync tick (which runs
+    unattended and only surfaces failures as a stuck `last_synced_at`)."""
+    probe = TodoList(caldav_url=payload.caldav_url, username=payload.username, password=payload.password)
+    try:
+        fetch_todo_components(probe)
+    except Exception as e:
+        return schemas.TodoListConnectionResult(ok=False, detail=str(e))
+    return schemas.TodoListConnectionResult(ok=True)
 
 
 @router.post("", response_model=schemas.TodoListOut)

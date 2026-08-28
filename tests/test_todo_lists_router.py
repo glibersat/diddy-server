@@ -70,6 +70,32 @@ def test_update_list_can_clear_a_place(db_session, user):
     assert updated.place_inside is False
 
 
+def test_test_connection_reports_ok_without_persisting(monkeypatch, db_session, user):
+    monkeypatch.setattr(todo_lists, "fetch_todo_components", lambda todo_list: [])
+
+    result = todo_lists.test_connection(
+        schemas.TodoListConnectionTest(caldav_url="https://caldav.example.com/groceries/", username="ada"),
+        user=user,
+    )
+
+    assert result == schemas.TodoListConnectionResult(ok=True, detail=None)
+    assert db_session.query(TodoList).count() == 0
+
+
+def test_test_connection_reports_failure_detail(monkeypatch, user):
+    def _boom(todo_list):
+        raise ConnectionError("auth failed")
+
+    monkeypatch.setattr(todo_lists, "fetch_todo_components", _boom)
+
+    result = todo_lists.test_connection(
+        schemas.TodoListConnectionTest(caldav_url="https://caldav.example.com/groceries/"),
+        user=user,
+    )
+
+    assert result == schemas.TodoListConnectionResult(ok=False, detail="auth failed")
+
+
 def test_list_lists_only_returns_the_owning_users_lists(db_session, user):
     other_payload = schemas.TodoListCreate(
         name="Not mine", caldav_url="https://caldav.example.com/x/", dismissible=True
