@@ -300,6 +300,18 @@ class RingPhoneOut(BaseModel):
     delivered: bool
 
 
+class AlertCreate(BaseModel):
+    """A light, fire-and-forget notification sent over the BLE-standard Alert Notification
+    Service, not the custom Reminder/Trigger pipeline - no dismiss/snooze options, no ack, no
+    persistence or retry."""
+
+    message: str = Field(max_length=100)
+
+
+class AlertOut(BaseModel):
+    delivered: bool
+
+
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -277,3 +277,9 @@ export async function ringPhone(): Promise<boolean> {
   const { data } = await client.post<{ delivered: boolean }>('/phone/ring')
   return data.delivered
 }
+
+/** Light, fire-and-forget notification - no dismiss/snooze options, no ack tracking. */
+export async function sendAlert(message: string): Promise<boolean> {
+  const { data } = await client.post<{ delivered: boolean }>('/alerts', { message })
+  return data.delivered
+}
