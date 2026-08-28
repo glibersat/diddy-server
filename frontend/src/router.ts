@@ -7,6 +7,7 @@ import TodoListsView from './views/TodoListsView.vue'
 import NotificationsView from './views/NotificationsView.vue'
 import HeartRateView from './views/HeartRateView.vue'
 import LocationView from './views/LocationView.vue'
+import SettingsView from './views/SettingsView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/notifications', name: 'notifications', component: NotificationsView, meta: { requiresAuth: true } },
     { path: '/heart-rate', name: 'heart-rate', component: HeartRateView, meta: { requiresAuth: true } },
     { path: '/location', name: 'location', component: LocationView, meta: { requiresAuth: true } },
+    { path: '/settings', name: 'settings', component: SettingsView, meta: { requiresAuth: true } },
   ],
 })
 

@@ -33,6 +33,14 @@ export interface User {
   email: string
   api_key: string
   timezone: string
+  digest_enabled: boolean
+  digest_time: string | null
+}
+
+export interface UserUpdateInput {
+  timezone?: string
+  digest_enabled?: boolean
+  digest_time?: string | null
 }
 
 export interface DailySchedule {
@@ -174,6 +182,11 @@ export async function createUser(email: string, timezone: string): Promise<User>
 
 export async function getMe(): Promise<User> {
   const { data } = await client.get<User>('/users/me')
+  return data
+}
+
+export async function updateMe(input: UserUpdateInput): Promise<User> {
+  const { data } = await client.patch<User>('/users/me', input)
   return data
 }
 
