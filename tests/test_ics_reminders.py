@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import IcsSource, Notification
+from app.models import IcsSource, Notification, NotificationChannel
 from app.scheduler.ics import compute_due, expand_occurrences, fetch_ics_text, run_all_ics_ticks, run_ics_source_tick
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.ics"
@@ -60,6 +60,7 @@ def test_run_ics_source_tick_creates_and_dedupes_notifications(db_session, user,
     assert created_again == 0  # same tick again -> nothing new, dedupe_key blocks re-insert
     assert db_session.query(Notification).count() == created
     assert source.last_synced_at == now
+    assert all(n.channel == NotificationChannel.alert for n in db_session.query(Notification).all())
 
 
 def test_run_ics_source_tick_only_refetches_when_stale(db_session, user, monkeypatch):

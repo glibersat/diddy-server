@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, UTC
 
 import pytest
 
-from app.models import AckAction, Notification, NotificationStatus, ReminderKind, RuleType, User
+from app.models import AckAction, Notification, NotificationChannel, NotificationStatus, ReminderKind, RuleType, User
 from app.notify import dispatcher
 from app.notify.ack import record_ack, record_delivered
 
@@ -34,6 +34,66 @@ def _pending_notification(user_id: str, dedupe_key: str = "d1") -> Notification:
         dismissible=False,
         snooze_minutes=[5, 15],
     )
+
+
+def _pending_alert(user_id: str, dedupe_key: str = "a1") -> Notification:
+    return Notification(
+        user_id=user_id,
+        rule_type=RuleType.ics_reminder,
+        rule_id="source-1",
+        dedupe_key=dedupe_key,
+        scheduled_for=datetime.now(UTC),
+        title="In 15 min: Dentist",
+        body="In 15 min: Dentist (14:30)",
+        channel=NotificationChannel.alert,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_sends_alert_payload(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    db_session.add(_pending_alert(user.id))
+    db_session.commit()
+
+    created = await dispatcher.dispatch_pending(db_session)
+
+    assert created == 1
+    assert fake.sent[0][1] == {"type": "alert", "message": "In 15 min: Dentist (14:30)"}
+
+
+def test_requeue_undelivered_retries_alert_channel_same_as_reminder(db_session, user, monkeypatch):
+    monkeypatch.setattr(dispatcher.settings, "delivery_timeout_seconds", 60)
+    notification = _pending_alert(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(seconds=120)
+    notification.send_attempts = 1
+    db_session.add(notification)
+    db_session.commit()
+
+    requeued = dispatcher.requeue_undelivered(db_session)
+
+    assert requeued == 1
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.pending
+
+
+def test_record_delivered_closes_out_alert_channel_without_a_separate_ack(db_session, user):
+    notification = _pending_alert(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC)
+    db_session.add(notification)
+    db_session.commit()
+
+    delivered = record_delivered(db_session, user.id)
+
+    assert delivered.delivered_at is not None
+    assert delivered.status == NotificationStatus.acked
+
+    # And requeue_unacked must not try to nag an alert that will never be acked.
+    far_future = datetime.now(UTC) + timedelta(days=1)
+    assert dispatcher.requeue_unacked(db_session, now=far_future) == 0
 
 
 @pytest.mark.asyncio

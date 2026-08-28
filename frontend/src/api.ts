@@ -107,6 +107,9 @@ export interface TodoItem {
 
 export type NotificationStatus = 'pending' | 'sent' | 'acked' | 'failed'
 export type AckAction = 'snoozed' | 'dismissed'
+/** Which BLE service delivers this notification: `reminder` (dismissible/snoozable, needs an
+ * on-watch ack) or `alert` (one-shot, no dismiss/snooze, no ack step). */
+export type NotificationChannel = 'reminder' | 'alert'
 
 export type RuleType = 'daily_schedule' | 'ics_reminder' | 'manual' | 'daily_digest' | 'place_arrival'
 
@@ -117,6 +120,7 @@ export interface Notification {
   scheduled_for: string
   title: string
   body: string
+  channel: NotificationChannel
   kind: ReminderKind
   dismissible: boolean
   snooze_minutes: number[]

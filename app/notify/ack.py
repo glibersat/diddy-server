@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 
 from sqlalchemy.orm import Session
 
-from app.models import AckAction, Notification, NotificationStatus
+from app.models import AckAction, Notification, NotificationChannel, NotificationStatus
 
 logger = logging.getLogger("diddy.notify.ack")
 
@@ -40,6 +40,11 @@ def record_delivered(db: Session, user_id: str) -> Notification | None:
     `record_ack`, since the protocol carries no notification id. Only matches a notification not
     already marked delivered, so a late/duplicate `delivered` for an already-confirmed send
     doesn't reattribute itself to whatever's sent since.
+
+    `channel=alert` notifications have no separate on-watch ack step (see
+    app/models.py::NotificationChannel), so this closes their lifecycle out immediately by
+    marking them `acked` too - otherwise they'd sit at `sent` forever and never be picked up by
+    `requeue_unacked`'s nag loop, which expects an ack that will never come.
     """
     notification = (
         db.query(Notification)
@@ -56,5 +61,7 @@ def record_delivered(db: Session, user_id: str) -> Notification | None:
         return None
 
     notification.delivered_at = datetime.now(UTC)
+    if notification.channel == NotificationChannel.alert:
+        notification.status = NotificationStatus.acked
     db.commit()
     return notification

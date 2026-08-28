@@ -6,10 +6,10 @@ from datetime import date, datetime, timedelta, UTC
 import httpx
 from dateutil.rrule import rrulestr
 from icalendar import Calendar
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import IcsSource, Notification, RuleType
+from app.models import IcsSource, NotificationChannel, RuleType
+from app.notify.queue import enqueue_notification
 
 LOOKAHEAD_BUFFER_MINUTES = 60  # extra margin past the largest offset, to tolerate slow/late ticks
 
@@ -94,24 +94,21 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
     created = 0
     for occurrence, offset in compute_due(occurrences, source.offsets_minutes, now):
         dedupe_key = f"ics:{source.id}:{occurrence.uid}:{occurrence.start.isoformat()}:{offset}"
-        notification = Notification(
-            user_id=source.user_id,
+        notification = enqueue_notification(
+            db,
+            source.user_id,
             rule_type=RuleType.ics_reminder,
             rule_id=source.id,
             dedupe_key=dedupe_key,
-            scheduled_for=now,
             title=f"In {offset} min: {occurrence.summary}",
-            body=f"{occurrence.summary} starts at {occurrence.start.strftime('%H:%M')}",
+            body=f"In {offset} min: {occurrence.summary} ({occurrence.start.strftime('%H:%M')})",
+            channel=NotificationChannel.alert,
             kind=source.kind,
             dismissible=source.dismissible,
             snooze_minutes=source.snooze_minutes,
         )
-        db.add(notification)
-        try:
-            db.commit()
+        if notification is not None:  # None means already reminded for this event+offset
             created += 1
-        except IntegrityError:
-            db.rollback()  # already reminded for this event+offset
 
     db.commit()
     return created

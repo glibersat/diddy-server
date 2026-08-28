@@ -5,13 +5,18 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Notification, NotificationStatus
+from app.models import Notification, NotificationChannel, NotificationStatus
 from app.notify.connection_manager import manager
 
 logger = logging.getLogger("diddy.notify.dispatcher")
 
 
-def _trigger_payload(notification: Notification) -> dict:
+def _dispatch_payload(notification: Notification) -> dict:
+    """Wire format depends on `channel` - see app/models.py::NotificationChannel. `alert` uses
+    the BLE-standard Alert Notification Service on the phone side (just a message, no
+    dismiss/snooze/kind); `reminder` uses the custom Reminder/Trigger characteristic."""
+    if notification.channel == NotificationChannel.alert:
+        return {"type": "alert", "message": notification.body}
     return {
         "type": "trigger",
         "kind": notification.kind,
@@ -23,10 +28,12 @@ def _trigger_payload(notification: Notification) -> dict:
 
 
 async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
-    """Send every `pending` Notification as a `trigger` over its user's companion WebSocket.
+    """Send every `pending` Notification over its user's companion WebSocket, as a `trigger` or
+    an `alert` depending on its channel (see `_dispatch_payload`).
 
     A successful send only means the phone received it - not that the watch showed it, and
-    definitely not that the wearer acted on it. `requeue_unacked` is what handles that gap.
+    definitely not (for `channel=reminder`) that the wearer acted on it. `requeue_unacked` is
+    what handles that gap.
 
     `user_id` scopes this to one user's notifications - used by `resend_now` so a single watch
     reconnecting doesn't also churn through every other user's pending queue.
@@ -37,7 +44,7 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     pending = query.all()
     now = datetime.now(UTC)
     for notification in pending:
-        delivered = await manager.send_to_user(notification.user_id, _trigger_payload(notification))
+        delivered = await manager.send_to_user(notification.user_id, _dispatch_payload(notification))
         notification.send_attempts += 1
         if delivered:
             notification.status = NotificationStatus.sent
@@ -120,6 +127,10 @@ async def resend_now(db: Session, user_id: str) -> int:
 def requeue_unacked(db: Session, now: datetime | None = None) -> int:
     """Resend notifications that reached the watch but were never acked within
     `ack_timeout_seconds` - the wearer never snoozed/dismissed it, so nag again.
+
+    Only ever matches `channel=reminder` rows in practice: `record_delivered` moves an `alert`
+    straight to `acked` the moment `delivered_at` is set (alerts have no ack step of their own),
+    so one never sits around `sent` long enough to hit this query.
 
     This only runs once a notification is at least `delivered` (see `requeue_undelivered` for the
     earlier, transport-level gap this doesn't cover): resending here is redundant with that faster

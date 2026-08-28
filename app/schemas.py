@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models import AckAction, NotificationStatus, ReminderKind, RuleType
+from app.models import AckAction, NotificationChannel, NotificationStatus, ReminderKind, RuleType
 
 
 def _validate_http_url(value: str, field_name: str) -> str:
@@ -321,6 +321,7 @@ class NotificationOut(BaseModel):
     scheduled_for: datetime
     title: str
     body: str
+    channel: NotificationChannel
     kind: ReminderKind
     dismissible: bool
     snooze_minutes: list[int]

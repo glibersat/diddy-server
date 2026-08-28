@@ -29,6 +29,18 @@ class ReminderKind(str, Enum):
     appointment = "appointment"
 
 
+class NotificationChannel(str, Enum):
+    """Which BLE service on the watch a Notification is delivered through - see
+    app/notify/dispatcher.py's payload builder. `reminder` uses the custom Reminder/Trigger
+    characteristic (dismissible/snoozable, expects an on-watch ack). `alert` uses the
+    BLE-standard Alert Notification Service instead: a one-shot message with no dismiss/snooze
+    options and no ack step - see app/notify/ack.py::record_delivered, which closes an alert's
+    lifecycle out on delivery confirmation alone."""
+
+    reminder = "reminder"
+    alert = "alert"
+
+
 class NotificationStatus(str, Enum):
     pending = "pending"  # queued, not yet sent over the companion WebSocket
     sent = "sent"  # delivered to the phone, awaiting an ack (or resend after timeout)
@@ -172,10 +184,12 @@ class Notification(Base):
     """Outbox/audit log. `rule_type` + `dedupe_key` is the seam future rule types plug into.
 
     `status == sent` only means the phone's WebSocket accepted the bytes - the companion app
-    drops a `trigger` silently if it isn't currently connected to the watch over BLE. `delivered_at`
-    is the stronger signal: the phone's BLE write of the Trigger characteristic actually completed,
-    reported back as a `delivered` message. `status` still tracks the wearer's snooze/dismiss `ack`
-    on top of that, since delivery to the watch and the wearer acting on it are different things.
+    drops the message silently if it isn't currently connected to the watch over BLE. `delivered_at`
+    is the stronger signal: the phone's BLE write actually completed, reported back as a `delivered`
+    message. For `channel == reminder`, `status` still tracks the wearer's snooze/dismiss `ack` on
+    top of that, since delivery to the watch and the wearer acting on it are different things; for
+    `channel == alert` there is no ack step, so `record_delivered` (app/notify/ack.py) closes the
+    lifecycle out itself as soon as `delivered_at` is set.
     """
 
     __tablename__ = "notifications"
@@ -190,6 +204,7 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String)
     body: Mapped[str] = mapped_column(String)
 
+    channel: Mapped[NotificationChannel] = mapped_column(String, default=NotificationChannel.reminder)
     kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.generic)
     dismissible: Mapped[bool] = mapped_column(default=True)
     snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
