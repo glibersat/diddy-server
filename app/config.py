@@ -8,7 +8,12 @@ class Settings(BaseSettings):
     default_timezone: str = "UTC"
 
     daily_tick_seconds: int = 60
-    ics_refresh_seconds: int = 300
+    # How often to check ICS sources for due reminders - NOT how often their feeds get
+    # re-fetched (that's each source's own `refresh_minutes`, throttled separately - see
+    # app/scheduler/ics.py::run_ics_source_tick). This interval is the ceiling on how late a
+    # reminder can arrive relative to its offset, so it's worth keeping short: the due-check
+    # itself is cheap, it only hits the network for sources whose fetch cache is stale.
+    ics_refresh_seconds: int = 60
     todo_refresh_seconds: int = 300
     dispatch_tick_seconds: int = 15
 

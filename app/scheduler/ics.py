@@ -75,10 +75,21 @@ def compute_due(
 
 
 def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = None) -> int:
+    """Checks `source` for due reminders against `now`. The due-check itself always runs - only
+    the remote fetch is throttled to `refresh_minutes`, reusing `cached_ics_text` otherwise, so
+    that how promptly a reminder fires depends on how often this is called (every scheduler tick,
+    see run_all_ics_ticks), not on the feed's own refresh cadence."""
     now = now or datetime.now(UTC)
+    last_synced_at = _as_datetime(source.last_synced_at) if source.last_synced_at else None
+    due_for_refetch = (
+        last_synced_at is None or now - last_synced_at >= timedelta(minutes=source.refresh_minutes)
+    )
+    if due_for_refetch or source.cached_ics_text is None:
+        source.cached_ics_text = fetch_ics_text(source.url_or_path)
+        source.last_synced_at = now
+
     lookahead = timedelta(minutes=max(source.offsets_minutes, default=0) + LOOKAHEAD_BUFFER_MINUTES)
-    ics_text = fetch_ics_text(source.url_or_path)
-    occurrences = expand_occurrences(ics_text, now - timedelta(minutes=5), now + lookahead)
+    occurrences = expand_occurrences(source.cached_ics_text, now - timedelta(minutes=5), now + lookahead)
 
     created = 0
     for occurrence, offset in compute_due(occurrences, source.offsets_minutes, now):
@@ -102,19 +113,17 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
         except IntegrityError:
             db.rollback()  # already reminded for this event+offset
 
-    source.last_synced_at = now
     db.commit()
     return created
 
 
 def run_all_ics_ticks(db: Session, now: datetime | None = None) -> int:
+    """Runs the due-check for every enabled source, every time this is called - see
+    run_ics_source_tick for why that's unconditional while the feed re-fetch isn't. Call this on
+    a short scheduler interval (app/config.py::ics_refresh_seconds); it's cheap for any source
+    whose cache is still fresh."""
     now = now or datetime.now(UTC)
     total = 0
     for source in db.query(IcsSource).filter(IcsSource.enabled.is_(True)).all():
-        last_synced_at = _as_datetime(source.last_synced_at) if source.last_synced_at else None
-        due_for_refresh = (
-            last_synced_at is None or now - last_synced_at >= timedelta(minutes=source.refresh_minutes)
-        )
-        if due_for_refresh:
-            total += run_ics_source_tick(db, source, now)
+        total += run_ics_source_tick(db, source, now)
     return total

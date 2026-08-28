@@ -5,7 +5,10 @@ Per-user notification backend for ADHD-friendly watch reminders. Two criteria to
 - **Daily schedule** (`/schedules`) — fire a message every day at a fixed local time, e.g. "take
   your meds".
 - **ICS reminders** (`/ics-sources`) — parse a personal ICS export and remind N minutes before
-  each event.
+  each event. Each source's `refresh_minutes` only throttles re-fetching that remote feed - the
+  due-check that actually fires reminders runs every `DIDDY_ICS_REFRESH_SECONDS` regardless, off
+  a cached copy of the feed, so a reminder's timing isn't at the mercy of the fetch cadence. See
+  `app/scheduler/ics.py::run_ics_source_tick`.
 - **Todo lists** (`/todo-lists`) — sync a CalDAV calendar's VTODOs, optionally tied to a place
   (lat/lng + radius, in 100m steps): the first time the phone's reported location comes within
   that radius, a reminder fires listing the list's pending items - e.g. a shopping list that

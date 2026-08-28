@@ -89,7 +89,14 @@ class DailySchedule(Base):
 
 
 class IcsSource(Base):
-    """Criterion #2: parse an ICS feed and remind `offsets_minutes` before each event."""
+    """Criterion #2: parse an ICS feed and remind `offsets_minutes` before each event.
+
+    `refresh_minutes` only throttles how often the remote feed is re-fetched
+    (`cached_ics_text`) - it does NOT gate how often we check for due reminders. Those are two
+    different concerns: re-fetching hits someone else's server and should stay infrequent, but
+    checking a cached feed against the clock is free and needs to run on every scheduler tick, or
+    a reminder can arrive up to `refresh_minutes` late. See app/scheduler/ics.py::run_ics_source_tick.
+    """
 
     __tablename__ = "ics_sources"
 
@@ -100,6 +107,7 @@ class IcsSource(Base):
     refresh_minutes: Mapped[int] = mapped_column(default=15)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cached_ics_text: Mapped[str | None] = mapped_column(String, nullable=True)
 
     kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.appointment)
     dismissible: Mapped[bool] = mapped_column(default=True)
