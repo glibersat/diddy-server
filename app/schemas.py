@@ -1,8 +1,21 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import AckAction, NotificationChannel, NotificationStatus, ReminderKind, RuleType
+
+
+def _validate_timezone(value: str) -> str:
+    """Reject anything ZoneInfo can't load - an unvalidated timezone reaches the scheduler
+    (app/scheduler/daily.py, app/scheduler/digest.py), where ZoneInfo(user.timezone) is called
+    unguarded inside a loop over every user: one bad value there would abort that tick before
+    reaching any user queried after it, not just fail for its own owner."""
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as e:
+        raise ValueError(f"Unknown timezone: {value!r}") from e
+    return value
 
 
 def _validate_http_url(value: str, field_name: str) -> str:
@@ -30,6 +43,8 @@ class UserCreate(BaseModel):
     email: str
     timezone: str = "Europe/Paris"
 
+    _validate_timezone = field_validator("timezone")(_validate_timezone)
+
 
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -46,6 +61,10 @@ class UserUpdate(BaseModel):
     timezone: str | None = None
     digest_enabled: bool | None = None
     digest_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+    _validate_timezone = field_validator("timezone")(
+        lambda v: v if v is None else _validate_timezone(v)
+    )
 
 
 class _ReminderOptionsMixin(BaseModel):

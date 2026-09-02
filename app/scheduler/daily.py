@@ -1,12 +1,15 @@
 """Criterion #1: fixed daily schedules (e.g. "take meds at 9am")."""
 
+import logging
 from datetime import datetime, UTC
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import DailySchedule, Notification, RuleType
+
+logger = logging.getLogger("diddy.scheduler.daily")
 
 
 def _weekday_bit(dt: datetime) -> int:
@@ -24,7 +27,13 @@ def run_daily_schedule_tick(db: Session, now: datetime | None = None) -> int:
     schedules = db.query(DailySchedule).filter(DailySchedule.enabled.is_(True)).all()
     for schedule in schedules:
         user = schedule.user
-        local_now = now.astimezone(ZoneInfo(user.timezone))
+        try:
+            tz = ZoneInfo(user.timezone)
+        except ZoneInfoNotFoundError:
+            # Don't let one user's bad timezone abort the tick for everyone queried after them.
+            logger.error("Skipping schedule %s: invalid timezone %r for user %s", schedule.id, user.timezone, user.id)
+            continue
+        local_now = now.astimezone(tz)
         if local_now.strftime("%H:%M") != schedule.time_of_day:
             continue
         if not (schedule.weekdays_mask & _weekday_bit(local_now)):

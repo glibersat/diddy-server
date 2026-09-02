@@ -120,3 +120,6 @@ see `README.md`.
 - No GenAI summary rule type yet (the planned third criterion — daily summary of
   emails/appointments). Slots in as described above.
 - No auth beyond a bare API key; fine for a trusted LAN, not for anything exposed further.
+- No alerting when a user's companion app has been disconnected (no live WebSocket) for an
+  extended period, e.g. a day - send an email in that case so a silent phone/dead battery
+  doesn't go unnoticed.

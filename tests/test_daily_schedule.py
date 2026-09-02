@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.models import DailySchedule, Notification, NotificationStatus
+from app.models import DailySchedule, Notification, NotificationStatus, User
 from app.scheduler.daily import run_daily_schedule_tick
 
 
@@ -63,3 +63,24 @@ def test_dedupes_within_the_same_day(db_session, user):
 
     assert created_again == 0
     assert db_session.query(Notification).count() == 1
+
+
+def test_bad_timezone_on_one_user_does_not_block_another(db_session, user):
+    """A row with a timezone ZoneInfo can't load (e.g. from data predating the UserUpdate/
+    UserCreate validation) must be skipped, not abort the tick before other users are checked."""
+    broken = User(email="broken@example.com", timezone="Not/AZone")
+    db_session.add(broken)
+    db_session.flush()
+    broken_schedule = DailySchedule(user_id=broken.id, time_of_day="09:00", message="Broken")
+    db_session.add(broken_schedule)
+
+    schedule = DailySchedule(user_id=user.id, time_of_day="09:00", message="Take meds")
+    db_session.add(schedule)
+    db_session.commit()
+
+    now = _utc_for_local(datetime(2024, 1, 3, 9, 0), user.timezone)
+    created = run_daily_schedule_tick(db_session, now=now)
+
+    assert created == 1
+    notification = db_session.query(Notification).one()
+    assert notification.user_id == user.id

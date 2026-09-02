@@ -2,7 +2,7 @@ from datetime import datetime, UTC
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app.models import IcsSource, Notification
+from app.models import IcsSource, Notification, User
 from app.scheduler.digest import run_digest_tick
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.ics"
@@ -62,6 +62,27 @@ def test_disabled_user_is_skipped(db_session, user, monkeypatch):
 
     now = _utc_for_local(datetime(2024, 1, 3, 7, 0), user.timezone)
     assert run_digest_tick(db_session, now=now) == 0
+
+
+def test_bad_timezone_on_one_user_does_not_block_another(db_session, user, monkeypatch):
+    """A row with a timezone ZoneInfo can't load (e.g. from data predating the UserUpdate/
+    UserCreate validation) must be skipped, not abort the tick before other users are checked."""
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", lambda url_or_path: FIXTURE.read_text())
+
+    broken = User(email="broken@example.com", timezone="Not/AZone", digest_enabled=True, digest_time="07:00")
+    db_session.add(broken)
+    user.digest_enabled = True
+    user.digest_time = "07:00"
+    source = IcsSource(user_id=user.id, url_or_path="https://example.com/calendar.ics")
+    db_session.add(source)
+    db_session.commit()
+
+    now = _utc_for_local(datetime(2024, 1, 3, 7, 0), user.timezone)
+    created = run_digest_tick(db_session, now=now)
+
+    assert created == 1
+    notification = db_session.query(Notification).one()
+    assert notification.user_id == user.id
 
 
 def test_dedupes_within_the_same_day(db_session, user, monkeypatch):

@@ -4,14 +4,17 @@ Reuses the same ICS expansion as app/scheduler/ics.py, but over the whole local 
 a lookahead window - and unlike daily.py/ics.py, sends nothing at all if there's nothing to show.
 """
 
+import logging
 from datetime import datetime, time, timedelta, UTC
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
 from app.models import IcsSource, NotificationChannel, ReminderKind, RuleType, User
 from app.notify.queue import enqueue_notification
 from app.scheduler import ics
+
+logger = logging.getLogger("diddy.scheduler.digest")
 
 MAX_LISTED = 5  # keep the body short enough for the watch's screen
 
@@ -51,7 +54,12 @@ def run_digest_tick(db: Session, now: datetime | None = None) -> int:
     created = 0
     users = db.query(User).filter(User.digest_enabled.is_(True), User.digest_time.isnot(None)).all()
     for user in users:
-        tz = ZoneInfo(user.timezone)
+        try:
+            tz = ZoneInfo(user.timezone)
+        except ZoneInfoNotFoundError:
+            # Don't let one user's bad timezone abort the tick for everyone queried after them.
+            logger.error("Skipping digest for user %s: invalid timezone %r", user.id, user.timezone)
+            continue
         local_now = now.astimezone(tz)
         if local_now.strftime("%H:%M") != user.digest_time:
             continue
