@@ -123,3 +123,6 @@ see `README.md`.
 - No alerting when a user's companion app has been disconnected (no live WebSocket) for an
   extended period, e.g. a day - send an email in that case so a silent phone/dead battery
   doesn't go unnoticed.
+- Reminders currently retry forever at `max_send_attempts`/`ack_timeout_seconds` cadence with
+  no wall-clock cutoff - drop (mark `failed` for good, stop resurrecting via `resend_now`) a
+  reminder that's been retried for 24h with no ack, instead of nagging indefinitely.
