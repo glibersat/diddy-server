@@ -18,19 +18,33 @@ def record_ack(db: Session, user_id: str, action: AckAction, snoozed_minutes: in
     """
     notification = (
         db.query(Notification)
-        .filter(Notification.user_id == user_id, Notification.status == NotificationStatus.sent)
-        .order_by(Notification.sent_at.desc())
+        .filter(
+            Notification.user_id == user_id,
+            Notification.status == NotificationStatus.sent,
+            # Only reminders are ever acked on-watch - an alert that's still awaiting its
+            # `delivered` must not soak up an ack meant for the reminder the wearer just cleared.
+            Notification.channel == NotificationChannel.reminder,
+        )
+        .order_by(Notification.sent_at.desc(), Notification.created_at.desc())
         .first()
     )
     if notification is None:
         logger.warning("Received ack for user %s with no outstanding sent notification", user_id)
         return None
 
-    notification.status = NotificationStatus.acked
-    notification.ack_action = action
-    notification.ack_snoozed_minutes = snoozed_minutes
-    notification.acked_at = datetime.now(UTC)
-    db.commit()
+    updated = _update_if_still_sent(
+        db,
+        notification,
+        {
+            Notification.status: NotificationStatus.acked,
+            Notification.ack_action: action,
+            Notification.ack_snoozed_minutes: snoozed_minutes,
+            Notification.acked_at: datetime.now(UTC),
+        },
+    )
+    if not updated:
+        logger.warning("Dropping ack for user %s: notification %s was requeued concurrently", user_id, notification.id)
+        return None
     return notification
 
 
@@ -53,15 +67,35 @@ def record_delivered(db: Session, user_id: str) -> Notification | None:
             Notification.status == NotificationStatus.sent,
             Notification.delivered_at.is_(None),
         )
-        .order_by(Notification.sent_at.desc())
+        .order_by(Notification.sent_at.desc(), Notification.created_at.desc())
         .first()
     )
     if notification is None:
         logger.warning("Received delivered confirmation for user %s with no outstanding undelivered notification", user_id)
         return None
 
-    notification.delivered_at = datetime.now(UTC)
+    values = {Notification.delivered_at: datetime.now(UTC)}
     if notification.channel == NotificationChannel.alert:
-        notification.status = NotificationStatus.acked
-    db.commit()
+        values[Notification.status] = NotificationStatus.acked
+    if not _update_if_still_sent(db, notification, values, undelivered=True):
+        logger.warning(
+            "Dropping delivered confirmation for user %s: notification %s was requeued concurrently", user_id, notification.id
+        )
+        return None
     return notification
+
+
+def _update_if_still_sent(db: Session, notification: Notification, values: dict, undelivered: bool = False) -> bool:
+    """Apply `values` only if `notification` is still in the state it was matched in - the
+    requeue jobs run on APScheduler's thread pool and may have flipped it back to `pending` in
+    between. If so, it'll be resent anyway, so dropping this message beats reattributing it to
+    some other notification."""
+    query = db.query(Notification).filter(
+        Notification.id == notification.id, Notification.status == NotificationStatus.sent
+    )
+    if undelivered:
+        query = query.filter(Notification.delivered_at.is_(None))
+    updated = query.update(values, synchronize_session=False)
+    db.commit()
+    db.refresh(notification)
+    return bool(updated)

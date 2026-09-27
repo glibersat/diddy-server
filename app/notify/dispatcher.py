@@ -1,7 +1,9 @@
+import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta, UTC
 
-from sqlalchemy import and_, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -27,9 +29,34 @@ def _dispatch_payload(notification: Notification) -> dict:
     }
 
 
+# Serializes dispatch per user, so the scheduler's `_dispatch_tick` and a `watch_ready`-driven
+# `resend_now` for the same user can't interleave their sends - the watch holds one reminder at
+# a time, so send order matters, and `record_ack`/`record_delivered` attribute by it.
+_user_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def expire_overdue(db: Session, now: datetime | None = None, user_id: str | None = None) -> int:
+    """Give up for good on anything still `pending`/`sent` past its `expires_at` - no more
+    sends or nags, and `resend_now` won't revive it (see Notification.expires_at)."""
+    now = now or datetime.now(UTC)
+    query = db.query(Notification).filter(
+        Notification.status.in_([NotificationStatus.pending, NotificationStatus.sent]),
+        Notification.expires_at.isnot(None),
+        Notification.expires_at <= now,
+    )
+    if user_id is not None:
+        query = query.filter(Notification.user_id == user_id)
+    expired = query.update(
+        {Notification.status: NotificationStatus.failed, Notification.error: "Expired"},
+        synchronize_session=False,
+    )
+    db.commit()
+    return expired
+
+
 async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     """Send every `pending` Notification over its user's companion WebSocket, as a `trigger` or
-    an `alert` depending on its channel (see `_dispatch_payload`).
+    an `alert` depending on its channel (see `_dispatch_payload`). Returns how many were sent.
 
     A successful send only means the phone received it - not that the watch showed it, and
     definitely not (for `channel=reminder`) that the wearer acted on it. `requeue_unacked` is
@@ -38,23 +65,78 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     `user_id` scopes this to one user's notifications - used by `resend_now` so a single watch
     reconnecting doesn't also churn through every other user's pending queue.
     """
-    query = db.query(Notification).filter(Notification.status == NotificationStatus.pending)
+    expire_overdue(db, user_id=user_id)
+    query = db.query(Notification.user_id).filter(Notification.status == NotificationStatus.pending)
     if user_id is not None:
         query = query.filter(Notification.user_id == user_id)
-    pending = query.all()
-    now = datetime.now(UTC)
+    user_ids = [row.user_id for row in query.distinct()]
+
+    sent = 0
+    for uid in user_ids:
+        async with _user_locks[uid]:
+            sent += await _dispatch_user(db, uid)
+    return sent
+
+
+async def _dispatch_user(db: Session, user_id: str) -> int:
+    """Oldest first, and each row is claimed (`pending` -> `sent`, committed) *before* its send
+    awaits: a `delivered`/`ack` the phone answers with can arrive while later rows are still
+    going out, and has to find this row already `sent` to be matched to it. The claim is a
+    conditional UPDATE, so a row another dispatcher (or a requeue job's thread) moved in the
+    meantime is skipped rather than sent twice.
+
+    No connected socket isn't a send attempt: the row just stays `pending` until the phone
+    reconnects, instead of burning `max_send_attempts` on ticks that never reached anything.
+    """
+    pending = (
+        db.query(Notification)
+        .filter(Notification.user_id == user_id, Notification.status == NotificationStatus.pending)
+        .order_by(Notification.created_at, Notification.id)
+        .all()
+    )
+    sent = 0
     for notification in pending:
-        delivered = await manager.send_to_user(notification.user_id, _dispatch_payload(notification))
-        notification.send_attempts += 1
-        if delivered:
-            notification.status = NotificationStatus.sent
-            notification.sent_at = now
-        elif notification.send_attempts >= settings.max_send_attempts:
-            notification.status = NotificationStatus.failed
-            notification.error = "No connected device after max_send_attempts"
-        # else: stays `pending`, picked up again on the next dispatch tick
-    db.commit()
-    return len(pending)
+        if not manager.is_connected(user_id):
+            break
+        now = datetime.now(UTC)
+        claimed = (
+            db.query(Notification)
+            .filter(Notification.id == notification.id, Notification.status == NotificationStatus.pending)
+            .update(
+                {
+                    Notification.status: NotificationStatus.sent,
+                    Notification.sent_at: now,
+                    Notification.send_attempts: Notification.send_attempts + 1,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        if not claimed:
+            continue
+        db.refresh(notification)
+
+        if await manager.send_to_user(user_id, _dispatch_payload(notification)):
+            sent += 1
+            continue
+
+        # Every socket failed mid-send (and got dropped): undo the claim, unless something
+        # already moved the row on.
+        gave_up = notification.send_attempts >= settings.max_send_attempts
+        db.query(Notification).filter(
+            Notification.id == notification.id,
+            Notification.status == NotificationStatus.sent,
+            Notification.sent_at == now,
+        ).update(
+            {
+                Notification.status: NotificationStatus.failed if gave_up else NotificationStatus.pending,
+                Notification.error: "Send failed after max_send_attempts" if gave_up else None,
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+        db.refresh(notification)
+    return sent
 
 
 def requeue_undelivered(db: Session, now: datetime | None = None) -> int:
@@ -71,23 +153,26 @@ def requeue_undelivered(db: Session, now: datetime | None = None) -> int:
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=settings.delivery_timeout_seconds)
-    stale = (
-        db.query(Notification)
-        .filter(
-            Notification.status == NotificationStatus.sent,
-            Notification.delivered_at.is_(None),
-            Notification.sent_at <= cutoff,
-        )
-        .all()
+    # One conditional UPDATE per outcome rather than load-modify-commit: these jobs run on
+    # APScheduler's thread pool, concurrently with `record_delivered` on the event loop, and a
+    # stale in-memory copy would requeue a row that just got confirmed.
+    stale = db.query(Notification).filter(
+        Notification.status == NotificationStatus.sent,
+        Notification.delivered_at.is_(None),
+        Notification.sent_at <= cutoff,
     )
-    for notification in stale:
-        if notification.send_attempts >= settings.max_send_attempts:
-            notification.status = NotificationStatus.failed
-            notification.error = "No delivery confirmation received after max_send_attempts"
-        else:
-            notification.status = NotificationStatus.pending
+    given_up = stale.filter(Notification.send_attempts >= settings.max_send_attempts).update(
+        {
+            Notification.status: NotificationStatus.failed,
+            Notification.error: "No delivery confirmation received after max_send_attempts",
+        },
+        synchronize_session=False,
+    )
+    requeued = stale.filter(Notification.send_attempts < settings.max_send_attempts).update(
+        {Notification.status: NotificationStatus.pending}, synchronize_session=False
+    )
     db.commit()
-    return len(stale)
+    return given_up + requeued
 
 
 async def resend_now(db: Session, user_id: str) -> int:
@@ -102,26 +187,36 @@ async def resend_now(db: Session, user_id: str) -> int:
     case `watch_ready` exists to handle - reconnected to a dead end: `dispatch_pending` only looks
     at `pending`, so nothing would ever pick a `failed` row back up. A reconnect gets a fresh
     attempt budget, since exhausting the old one was about the earlier disconnected stretch, not
-    this attempt.
+    this attempt. Not revived: anything past its `expires_at`, and reminders that failed after
+    being delivered but never acked (the wearer already ignored every nag).
+
+    Runs under the user's dispatch lock, so a send already in flight finishes (and is re-sent
+    here if still unconfirmed) instead of racing this.
     """
-    stale = (
-        db.query(Notification)
-        .filter(
+    async with _user_locks[user_id]:
+        expire_overdue(db, user_id=user_id)
+        # `delivered_at` unset = failed before reaching the watch; set = delivered, nags ignored.
+        now = datetime.now(UTC)
+        db.query(Notification).filter(
             Notification.user_id == user_id,
-            or_(
-                and_(Notification.status == NotificationStatus.sent, Notification.delivered_at.is_(None)),
-                Notification.status == NotificationStatus.failed,
-            ),
+            Notification.status == NotificationStatus.failed,
+            Notification.delivered_at.is_(None),
+            or_(Notification.expires_at.is_(None), Notification.expires_at > now),
+        ).update(
+            {
+                Notification.status: NotificationStatus.pending,
+                Notification.send_attempts: 0,
+                Notification.error: None,
+            },
+            synchronize_session=False,
         )
-        .all()
-    )
-    for notification in stale:
-        if notification.status == NotificationStatus.failed:
-            notification.send_attempts = 0
-            notification.error = None
-        notification.status = NotificationStatus.pending
-    db.commit()
-    return await dispatch_pending(db, user_id=user_id)
+        db.query(Notification).filter(
+            Notification.user_id == user_id,
+            Notification.status == NotificationStatus.sent,
+            Notification.delivered_at.is_(None),
+        ).update({Notification.status: NotificationStatus.pending}, synchronize_session=False)
+        db.commit()
+        return await _dispatch_user(db, user_id)
 
 
 def requeue_unacked(db: Session, now: datetime | None = None) -> int:
@@ -138,21 +233,19 @@ def requeue_unacked(db: Session, now: datetime | None = None) -> int:
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=settings.ack_timeout_seconds)
-    stale = (
-        db.query(Notification)
-        .filter(
-            Notification.status == NotificationStatus.sent,
-            Notification.delivered_at.isnot(None),
-            Notification.sent_at <= cutoff,
-        )
-        .all()
+    # Conditional UPDATEs for the same reason as `requeue_undelivered`.
+    stale = db.query(Notification).filter(
+        Notification.status == NotificationStatus.sent,
+        Notification.delivered_at.isnot(None),
+        Notification.sent_at <= cutoff,
     )
-    for notification in stale:
-        if notification.send_attempts >= settings.max_send_attempts:
-            notification.status = NotificationStatus.failed
-            notification.error = "No ack received after max_send_attempts"
-        else:
-            notification.status = NotificationStatus.pending
-            notification.delivered_at = None
+    given_up = stale.filter(Notification.send_attempts >= settings.max_send_attempts).update(
+        {Notification.status: NotificationStatus.failed, Notification.error: "No ack received after max_send_attempts"},
+        synchronize_session=False,
+    )
+    requeued = stale.filter(Notification.send_attempts < settings.max_send_attempts).update(
+        {Notification.status: NotificationStatus.pending, Notification.delivered_at: None},
+        synchronize_session=False,
+    )
     db.commit()
-    return len(stale)
+    return given_up + requeued

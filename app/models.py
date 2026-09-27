@@ -1,11 +1,12 @@
 import secrets
 import uuid
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from enum import Enum
 
 from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import settings
 from app.db import Base, UTCDateTime
 
 
@@ -19,6 +20,10 @@ def _api_key() -> str:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _default_expiry() -> datetime:
+    return datetime.now(UTC) + timedelta(hours=settings.notification_ttl_hours)
 
 
 class ReminderKind(str, Enum):
@@ -212,6 +217,10 @@ class Notification(Base):
     status: Mapped[NotificationStatus] = mapped_column(String, default=NotificationStatus.pending)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Past this, the dispatcher gives up (`failed`, error "Expired") instead of sending or
+    # nagging again - e.g. an ICS reminder is pointless once its event has started. NULL (rows
+    # from before this column existed) means no expiry.
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=_default_expiry)
     send_attempts: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
 

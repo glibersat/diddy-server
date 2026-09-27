@@ -32,5 +32,10 @@ class Settings(BaseSettings):
     # it can stay short.
     delivery_timeout_seconds: int = 20
 
+    # Default wall-clock lifetime of a Notification (`Notification.expires_at`) for producers
+    # that don't set a tighter one - past it, the dispatcher stops sending/nagging and a
+    # `watch_ready` reconnect won't revive it, so a long absence doesn't replay stale reminders.
+    notification_ttl_hours: int = 24
+
 
 settings = Settings()

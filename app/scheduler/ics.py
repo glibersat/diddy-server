@@ -106,6 +106,7 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
             kind=source.kind,
             dismissible=source.dismissible,
             snooze_minutes=source.snooze_minutes,
+            expires_at=occurrence.start,  # "In N min" is pointless once the event has started
         )
         if notification is not None:  # None means already reminded for this event+offset
             created += 1

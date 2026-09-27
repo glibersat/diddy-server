@@ -81,6 +81,7 @@ def run_digest_tick(db: Session, now: datetime | None = None) -> int:
             kind=ReminderKind.generic,
             dismissible=True,
             snooze_minutes=[],
+            expires_at=datetime.combine(local_now.date() + timedelta(days=1), time.min, tzinfo=tz),
         )
         if notification is not None:  # None means already enqueued this minute/day, e.g. after a restart
             created += 1

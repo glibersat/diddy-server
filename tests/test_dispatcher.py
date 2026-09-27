@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, UTC
 
 import pytest
@@ -13,6 +14,9 @@ class FakeConnectionManager:
     def __init__(self, connected_users: set[str]):
         self.connected_users = connected_users
         self.sent: list[tuple[str, dict]] = []
+
+    def is_connected(self, user_id: str) -> bool:
+        return user_id in self.connected_users
 
     async def send_to_user(self, user_id: str, payload: dict) -> bool:
         if user_id not in self.connected_users:
@@ -117,8 +121,34 @@ async def test_dispatch_pending_sends_and_marks_sent(db_session, user, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_dispatch_pending_fails_after_max_attempts(db_session, user, monkeypatch):
+async def test_dispatch_pending_leaves_offline_users_pending_without_spending_attempts(db_session, user, monkeypatch):
+    """No socket isn't a send attempt - otherwise a phone offline for a minute or so would burn
+    the whole max_send_attempts budget on ticks that never reached anything."""
     fake = FakeConnectionManager(connected_users=set())  # nobody connected
+    monkeypatch.setattr(dispatcher, "manager", fake)
+    monkeypatch.setattr(dispatcher.settings, "max_send_attempts", 2)
+
+    notification = _pending_notification(user.id)
+    db_session.add(notification)
+    db_session.commit()
+
+    for _ in range(5):
+        assert await dispatcher.dispatch_pending(db_session) == 0
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.pending
+    assert notification.send_attempts == 0
+
+
+class FailingSocketManager(FakeConnectionManager):
+    """Connected, but every send fails (the dead socket gets dropped mid-send)."""
+
+    async def send_to_user(self, user_id: str, payload: dict) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_fails_after_max_failed_sends(db_session, user, monkeypatch):
+    fake = FailingSocketManager(connected_users={user.id})
     monkeypatch.setattr(dispatcher, "manager", fake)
     monkeypatch.setattr(dispatcher.settings, "max_send_attempts", 2)
 
@@ -133,6 +163,127 @@ async def test_dispatch_pending_fails_after_max_attempts(db_session, user, monke
     await dispatcher.dispatch_pending(db_session)
     db_session.refresh(notification)
     assert notification.status == NotificationStatus.failed  # attempt 2 == max, gives up
+
+
+@pytest.mark.asyncio
+async def test_delivered_arriving_mid_dispatch_matches_the_row_just_sent(db_session, user, monkeypatch):
+    """The phone's `delivered` can come back while dispatch is still awaiting later sends - the
+    row has to already be `sent` by then, or the confirmation is dropped."""
+
+    class ConfirmingManager(FakeConnectionManager):
+        async def send_to_user(self, user_id: str, payload: dict) -> bool:
+            await super().send_to_user(user_id, payload)
+            self.confirmed.append(record_delivered(db_session, user_id))
+            return True
+
+    fake = ConfirmingManager(connected_users={user.id})
+    fake.confirmed = []
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    db_session.add_all([_pending_notification(user.id, "d1"), _pending_notification(user.id, "d2")])
+    db_session.commit()
+
+    assert await dispatcher.dispatch_pending(db_session) == 2
+    assert all(n is not None for n in fake.confirmed)
+    assert len({n.id for n in fake.confirmed}) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_dispatch_sends_each_notification_once(db_session, user, monkeypatch):
+    """`_dispatch_tick` and a `watch_ready`-driven `resend_now` for the same user can overlap."""
+
+    class YieldingManager(FakeConnectionManager):
+        async def send_to_user(self, user_id: str, payload: dict) -> bool:
+            await asyncio.sleep(0)  # let the other dispatcher run mid-send, like a real socket
+            return await super().send_to_user(user_id, payload)
+
+    fake = YieldingManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    db_session.add_all([_pending_notification(user.id, "d1"), _pending_notification(user.id, "d2")])
+    db_session.commit()
+
+    await asyncio.gather(dispatcher.dispatch_pending(db_session), dispatcher.dispatch_pending(db_session))
+
+    assert len(fake.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_sends_oldest_first(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    older = _pending_notification(user.id, "old")
+    older.body = "first"
+    older.created_at = datetime.now(UTC) - timedelta(minutes=1)
+    newer = _pending_notification(user.id, "new")
+    newer.body = "second"
+    db_session.add_all([newer, older])
+    db_session.commit()
+
+    await dispatcher.dispatch_pending(db_session)
+
+    assert [payload["body"] for _, payload in fake.sent] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_record_ack_goes_to_last_reminder_of_a_dispatch_batch(db_session, user, monkeypatch):
+    """The watch shows only the last trigger it got, so that's what the wearer is acking - not
+    an arbitrary row out of a batch that all shared one `sent_at`."""
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    first = _pending_notification(user.id, "first")
+    first.created_at = datetime.now(UTC) - timedelta(minutes=1)
+    last = _pending_notification(user.id, "last")
+    db_session.add_all([first, last])
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+
+    assert record_ack(db_session, user.id, AckAction.dismissed, 0).id == last.id
+
+
+def test_record_ack_ignores_alert_channel(db_session, user):
+    reminder = _pending_notification(user.id, "reminder")
+    reminder.status = NotificationStatus.sent
+    reminder.sent_at = datetime.now(UTC) - timedelta(seconds=30)
+    alert = _pending_alert(user.id)
+    alert.status = NotificationStatus.sent
+    alert.sent_at = datetime.now(UTC)  # more recent, still awaiting `delivered`
+    db_session.add_all([reminder, alert])
+    db_session.commit()
+
+    assert record_ack(db_session, user.id, AckAction.dismissed, 0).id == reminder.id
+    db_session.refresh(alert)
+    assert alert.status == NotificationStatus.sent
+
+
+def test_record_delivered_drops_confirmation_for_row_requeued_concurrently(db_session, user, monkeypatch):
+    """A requeue job (another thread) flips the row back to `pending` between the match and the
+    write - the delivered must not land on a row that's about to be resent anyway."""
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC)
+    db_session.add(notification)
+    db_session.commit()
+
+    from app.notify import ack
+
+    real_update = ack._update_if_still_sent
+
+    def requeue_first(db, n, values, undelivered=False):
+        db.query(Notification).filter(Notification.id == n.id).update(
+            {Notification.status: NotificationStatus.pending}, synchronize_session=False
+        )
+        db.commit()
+        return real_update(db, n, values, undelivered)
+
+    monkeypatch.setattr(ack, "_update_if_still_sent", requeue_first)
+
+    assert record_delivered(db_session, user.id) is None
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.pending
+    assert notification.delivered_at is None
 
 
 @pytest.mark.asyncio
@@ -379,3 +530,63 @@ def test_record_delivered_skips_already_delivered_notification(db_session, user)
 
 def test_record_delivered_with_no_sent_notification_returns_none(db_session, user):
     assert record_delivered(db_session, user.id) is None
+
+
+@pytest.mark.asyncio
+async def test_resend_now_does_not_revive_ignored_reminder(db_session, user, monkeypatch):
+    """Failed after being delivered and nagged max_send_attempts times - the wearer ignored it,
+    and reconnecting doesn't change that."""
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.failed
+    notification.delivered_at = datetime.now(UTC) - timedelta(minutes=30)
+    notification.error = "No ack received after max_send_attempts"
+    db_session.add(notification)
+    db_session.commit()
+
+    assert await dispatcher.resend_now(db_session, user.id) == 0
+    assert fake.sent == []
+
+
+@pytest.mark.asyncio
+async def test_resend_now_does_not_revive_expired(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    notification = _pending_notification(user.id)
+    notification.status = NotificationStatus.failed
+    notification.error = "No delivery confirmation received after max_send_attempts"
+    notification.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert await dispatcher.resend_now(db_session, user.id) == 0
+    assert fake.sent == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_expires_instead_of_sending(db_session, user, monkeypatch):
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+
+    notification = _pending_notification(user.id)
+    notification.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert await dispatcher.dispatch_pending(db_session) == 0
+    assert fake.sent == []
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.failed
+    assert notification.error == "Expired"
+
+
+def test_notifications_get_a_default_expiry(db_session, user):
+    notification = _pending_notification(user.id)
+    db_session.add(notification)
+    db_session.commit()
+
+    assert notification.expires_at is not None
+    assert notification.expires_at > datetime.now(UTC) + timedelta(hours=23)
