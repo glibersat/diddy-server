@@ -24,8 +24,9 @@ but they're the source of truth, and the companion app / firmware are developed 
 Originally built against generic FCM/APNs push, then rebuilt once the companion app's actual
 protocol was found. Delivery is **not** push notifications — it's a persistent WebSocket:
 
-- Companion app connects to `ws://<host>/ws?api_key=<user's api key>` and stays connected
-  (auto-reconnect with backoff is the phone's job, not this server's).
+- Companion app connects to `ws://<host>/ws` with its API key in an `X-API-Key` header (the
+  older `?api_key=<key>` query param still works) and stays connected (auto-reconnect with
+  backoff is the phone's job, not this server's).
 - Backend → phone: `{"type": "trigger", "kind": ..., "dismissible": ..., "snoozeMinutes": [...],
   "title": ..., "body": ...}`. Fire-and-forget — sending it doesn't mean the watch showed it, and
   if the phone isn't BLE-connected to the watch the trigger is silently dropped with no error
@@ -78,13 +79,16 @@ that's the whole point of routing everything through `Notification`.
 
 ## Scheduler (`app/scheduler/`, wired in `app/scheduler/jobs.py`)
 
-Four APScheduler jobs (`AsyncIOScheduler`, started/stopped in `app/main.py`'s lifespan):
+APScheduler jobs (`AsyncIOScheduler`, started/stopped in `app/main.py`'s lifespan) plus one
+dispatch loop task started alongside them. Sync jobs run on APScheduler's thread pool, concurrently
+with the event loop, which is why every `Notification` state change is a conditional UPDATE
+rather than load-modify-commit:
 
 | Job | Interval (default) | Does |
 |---|---|---|
 | `_daily_tick` | 60s (`DIDDY_DAILY_TICK_SECONDS`) | `daily.py::run_daily_schedule_tick` — matches each enabled `DailySchedule` against "now" in the user's tz; inserts a `Notification` (dedupe key = `daily:{schedule_id}:{local_date}`, so a slow/duplicate tick can't double-fire). |
 | `_ics_tick` | 300s (`DIDDY_ICS_REFRESH_SECONDS`) | `ics.py::run_all_ics_ticks` — for each `IcsSource` due for refresh, fetches + parses the ICS (including basic `RRULE` expansion via `dateutil`), and for each event×offset whose trigger time has just passed, inserts a `Notification` (dedupe key includes event UID + occurrence start + offset). |
-| `_dispatch_tick` | 30s (`DIDDY_DISPATCH_TICK_SECONDS`) | `dispatcher.py::dispatch_pending` (async) — sends every `pending` `Notification` as a `trigger` over the recipient's WebSocket(s) via `ConnectionManager`. |
+| dispatch loop (not an APScheduler job) | on wake, else every 15s (`DIDDY_DISPATCH_TICK_SECONDS`) | `dispatcher.py::run_dispatch_loop` → `dispatch_pending` — sends every `pending` `Notification` oldest first over the recipient's WebSocket(s) via `ConnectionManager`, claiming each row as `sent` before the send awaits, under a per-user lock. Woken immediately (`dispatcher.wake`, thread-safe) whenever `enqueue_notification` inserts a row or a requeue job flips one back to `pending`. A user with no connected socket is skipped without spending a send attempt. Anything past `Notification.expires_at` (default `DIDDY_NOTIFICATION_TTL_HOURS`, event start for ICS reminders, local midnight for the digest) is marked `failed`/"Expired" instead of sent. |
 | `_requeue_tick` | 30s | `dispatcher.py::requeue_unacked` — the resend-until-acked logic described above. |
 
 Decide-it's-due (`daily.py`, `ics.py`) and deliver-it (`dispatcher.py`) are deliberately separate
@@ -102,10 +106,10 @@ enums subclass `str` specifically so this degrades safely).
 - `POST/GET/PATCH/DELETE /schedules` (`app/routers/schedules.py`)
 - `POST/GET/PATCH/DELETE /ics-sources` (`app/routers/ics_sources.py`)
 - `GET /notifications` — outbox/audit log including ack status (`app/routers/notifications.py`)
-- `WS /ws?api_key=...` (`app/routers/ws.py`) — companion app connection
+- `WS /ws` (`app/routers/ws.py`) — companion app connection
 
-Auth is `X-API-Key` header (`app/auth.py::get_current_user`) for HTTP, `api_key` query param for
-the WebSocket. Deliberately minimal per an earlier decision — no signup/session flow.
+Auth is the `X-API-Key` header (`app/auth.py::get_current_user`) for HTTP and the WebSocket alike;
+the WebSocket also still accepts an `api_key` query param for older clients. Deliberately minimal per an earlier decision — no signup/session flow.
 
 ## Stack & layout
 
@@ -120,9 +124,9 @@ see `README.md`.
 - No GenAI summary rule type yet (the planned third criterion — daily summary of
   emails/appointments). Slots in as described above.
 - No auth beyond a bare API key; fine for a trusted LAN, not for anything exposed further.
+  ICS/CalDAV URLs resolving to loopback/private/link-local addresses are refused unless
+  `DIDDY_ALLOW_PRIVATE_FEED_URLS=true` (`app/netguard.py`) - set it if your calendars live on
+  the LAN.
 - No alerting when a user's companion app has been disconnected (no live WebSocket) for an
   extended period, e.g. a day - send an email in that case so a silent phone/dead battery
   doesn't go unnoticed.
-- Reminders currently retry forever at `max_send_attempts`/`ack_timeout_seconds` cadence with
-  no wall-clock cutoff - drop (mark `failed` for good, stop resurrecting via `resend_now`) a
-  reminder that's been retried for 24h with no ack, instead of nagging indefinitely.

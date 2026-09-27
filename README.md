@@ -18,7 +18,7 @@ Per-user notification backend for ADHD-friendly watch reminders. Two criteria to
 Delivery follows the companion app's protocol
 (`../companion-android/docs/backend-protocol.md`, mirroring InfiniTime's BLE
 `doc/ReminderService.md`): the backend pushes a `trigger` JSON message over a persistent
-per-user WebSocket at `/ws?api_key=...`, and the phone relays a `snoozed`/`dismissed` `ack`
+per-user WebSocket at `/ws` (API key in an `X-API-Key` header), and the phone relays a `snoozed`/`dismissed` `ack`
 back once the wearer actually acts on it. There's no delivery guarantee in the protocol itself,
 so unacked triggers are automatically resent (`DIDDY_ACK_TIMEOUT_SECONDS`, capped at
 `DIDDY_MAX_SEND_ATTEMPTS`).
@@ -83,7 +83,7 @@ uv run pytest
   last-synced items
 - `GET /notifications` — outbox/audit log, including ack status
 - `GET /heart-rate?since=...&until=...` — bpm readings from the watch, optionally windowed
-- `WS /ws?api_key=...` — companion app connection: receives `trigger`, sends `ack`/`delivered`/`heart_rate`
+- `WS /ws` — companion app connection (`X-API-Key` header, or legacy `?api_key=...`): receives `trigger`, sends `ack`/`delivered`/`heart_rate`
 
 ## Frontend
 
@@ -105,6 +105,10 @@ Set `VITE_API_BASE` (e.g. in `frontend/.env.local`) to point at a different back
 For anything beyond your own LAN, terminate TLS in front of uvicorn — the companion app
 supports `wss://`/`https://` out of the box (`BackendClient.buildWebSocketUrl` in the
 Android app), but nothing here does TLS itself.
+
+ICS feeds and CalDAV lists hosted on your LAN (Nextcloud, Radicale, ...) are refused by default,
+so users can't make the server probe its own network - set `DIDDY_ALLOW_PRIVATE_FEED_URLS=true`
+on a trusted-LAN deployment that needs them.
 
 1. On the target host, set up the app as in **Running** above (`uv sync --extra dev`,
    `alembic upgrade head` — the first time, see **Database migrations**' stamping note if
@@ -137,7 +141,7 @@ Android app), but nothing here does TLS itself.
    `nginx -t`, `systemctl reload nginx`, then run `sudo certbot --nginx -d your-domain.example`
    to provision the cert (certbot rewrites the TLS block and sets up auto-renewal). See the
    comments in that file for why `/ws` needs its own `location` block (Upgrade headers, long
-   timeouts, no access log — the `?api_key=...` query param shouldn't land in plaintext logs),
+   timeouts, no access log — older clients pass `?api_key=...`, which shouldn't land in plaintext logs),
    why `/users` is rate-limited (it's the one endpoint reachable with no API key at all), and
    why the frontend route (`/`) falls back to `index.html` (vue-router's history mode needs
    that for deep links to survive a refresh).

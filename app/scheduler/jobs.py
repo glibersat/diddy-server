@@ -4,7 +4,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.db import SessionLocal
-from app.notify.dispatcher import dispatch_pending, requeue_unacked, requeue_undelivered
+from app.notify.dispatcher import requeue_unacked, requeue_undelivered
 from app.scheduler.daily import run_daily_schedule_tick
 from app.scheduler.digest import run_digest_tick
 from app.scheduler.ics import run_all_ics_ticks
@@ -33,11 +33,6 @@ def _todo_tick() -> None:
         run_all_todo_ticks(db)
 
 
-async def _dispatch_tick() -> None:
-    with SessionLocal() as db:
-        await dispatch_pending(db)
-
-
 def _requeue_tick() -> None:
     with SessionLocal() as db:
         requeue_unacked(db)
@@ -54,7 +49,8 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(_digest_tick, "interval", seconds=settings.daily_tick_seconds, id="digest_tick")
     scheduler.add_job(_ics_tick, "interval", seconds=settings.ics_refresh_seconds, id="ics_tick")
     scheduler.add_job(_todo_tick, "interval", seconds=settings.todo_refresh_seconds, id="todo_tick")
-    scheduler.add_job(_dispatch_tick, "interval", seconds=settings.dispatch_tick_seconds, id="dispatch_tick")
+    # Dispatch itself isn't a job here: it's app/notify/dispatcher.py::run_dispatch_loop, woken
+    # as soon as anything is enqueued (started in app/main.py's lifespan).
     scheduler.add_job(
         _requeue_tick, "interval", seconds=settings.dispatch_tick_seconds, id="requeue_tick"
     )

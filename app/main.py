@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -16,6 +18,8 @@ from app.routers import (
     users,
     ws,
 )
+from app.db import SessionLocal
+from app.notify.dispatcher import run_dispatch_loop
 from app.scheduler.jobs import build_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -25,12 +29,16 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     # Schema is owned by Alembic now, not created here - run `alembic upgrade head` before
     # starting the app (see README.md's "Database migrations" section).
+    dispatch_loop = asyncio.create_task(run_dispatch_loop(SessionLocal))
     scheduler = build_scheduler()
     scheduler.start()
     try:
         yield
     finally:
         scheduler.shutdown()
+        dispatch_loop.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await dispatch_loop
 
 
 app = FastAPI(title="Diddy Notification Server", lifespan=lifespan)

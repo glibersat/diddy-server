@@ -1,5 +1,6 @@
 """Criterion #2: reminders N minutes before events in a personal ICS export."""
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
 
@@ -9,7 +10,10 @@ from icalendar import Calendar
 from sqlalchemy.orm import Session
 
 from app.models import IcsSource, NotificationChannel, RuleType
+from app.netguard import check_public_url
 from app.notify.queue import enqueue_notification
+
+logger = logging.getLogger("diddy.scheduler.ics")
 
 LOOKAHEAD_BUFFER_MINUTES = 60  # extra margin past the largest offset, to tolerate slow/late ticks
 
@@ -27,7 +31,13 @@ def fetch_ics_text(url_or_path: str) -> str:
     self-registered user make the server read arbitrary files off its own disk."""
     if not (url_or_path.startswith("http://") or url_or_path.startswith("https://")):
         raise ValueError(f"Unsupported ICS source (must be http:// or https://): {url_or_path!r}")
-    response = httpx.get(url_or_path, timeout=10, follow_redirects=True)
+    # The request hook runs for every hop, so a public URL can't redirect into the LAN.
+    with httpx.Client(
+        timeout=10,
+        follow_redirects=True,
+        event_hooks={"request": [lambda request: check_public_url(str(request.url))]},
+    ) as client:
+        response = client.get(url_or_path)
     response.raise_for_status()
     return response.text
 
@@ -85,8 +95,15 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
         last_synced_at is None or now - last_synced_at >= timedelta(minutes=source.refresh_minutes)
     )
     if due_for_refetch or source.cached_ics_text is None:
-        source.cached_ics_text = fetch_ics_text(source.url_or_path)
-        source.last_synced_at = now
+        try:
+            source.cached_ics_text = fetch_ics_text(source.url_or_path)
+            source.last_synced_at = now
+        except Exception:
+            # Keep reminding from the last good copy rather than going silent while the feed is
+            # down; `last_synced_at` stays put so the next tick retries the fetch.
+            if source.cached_ics_text is None:
+                raise
+            logger.warning("Refetching ICS source %s failed, using cached copy", source.id, exc_info=True)
 
     lookahead = timedelta(minutes=max(source.offsets_minutes, default=0) + LOOKAHEAD_BUFFER_MINUTES)
     occurrences = expand_occurrences(source.cached_ics_text, now - timedelta(minutes=5), now + lookahead)
@@ -123,5 +140,10 @@ def run_all_ics_ticks(db: Session, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     total = 0
     for source in db.query(IcsSource).filter(IcsSource.enabled.is_(True)).all():
-        total += run_ics_source_tick(db, source, now)
+        # One unreachable/broken feed mustn't abort the tick for every source queried after it.
+        try:
+            total += run_ics_source_tick(db, source, now)
+        except Exception:
+            db.rollback()
+            logger.exception("Skipping ICS source %s this tick", source.id)
     return total

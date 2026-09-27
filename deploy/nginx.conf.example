@@ -61,8 +61,8 @@ server {
     # and a long read timeout - it's meant to stay open indefinitely, not time out like a
     # normal HTTP request.
     location /ws {
-        # api_key is passed as a query param (app/routers/ws.py) - don't let it land in the
-        # access log in plaintext.
+        # Older companion builds pass api_key as a query param (app/routers/ws.py) - don't let
+        # it land in the access log in plaintext.
         access_log off;
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;

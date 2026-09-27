@@ -4,10 +4,10 @@ import logging
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import DailySchedule, Notification, RuleType
+from app.models import DailySchedule, RuleType
+from app.notify.queue import enqueue_notification
 
 logger = logging.getLogger("diddy.scheduler.daily")
 
@@ -40,22 +40,18 @@ def run_daily_schedule_tick(db: Session, now: datetime | None = None) -> int:
             continue
 
         dedupe_key = f"daily:{schedule.id}:{local_now.date().isoformat()}"
-        notification = Notification(
-            user_id=user.id,
+        notification = enqueue_notification(
+            db,
+            user.id,
             rule_type=RuleType.daily_schedule,
             rule_id=schedule.id,
             dedupe_key=dedupe_key,
-            scheduled_for=now,
             title="Reminder",
             body=schedule.message,
             kind=schedule.kind,
             dismissible=schedule.dismissible,
             snooze_minutes=schedule.snooze_minutes,
         )
-        db.add(notification)
-        try:
-            db.commit()
+        if notification is not None:  # None means already enqueued this minute/day, e.g. after a restart
             created += 1
-        except IntegrityError:
-            db.rollback()  # already enqueued this minute/day, e.g. after a restart
     return created

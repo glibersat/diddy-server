@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timedelta, UTC
 
 from sqlalchemy import or_
@@ -33,6 +34,45 @@ def _dispatch_payload(notification: Notification) -> dict:
 # `resend_now` for the same user can't interleave their sends - the watch holds one reminder at
 # a time, so send order matters, and `record_ack`/`record_delivered` attribute by it.
 _user_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Bound by `run_dispatch_loop` while it runs; until then (and in tests) `wake` is a no-op.
+_loop: asyncio.AbstractEventLoop | None = None
+_wakeup: asyncio.Event | None = None
+
+
+def wake() -> None:
+    """Ask the dispatch loop to run now rather than at its next `dispatch_tick_seconds` tick -
+    called whenever something becomes `pending`. Safe from any thread: most producers run on
+    APScheduler's thread pool."""
+    loop, event = _loop, _wakeup
+    if loop is None or event is None:
+        return
+    try:
+        loop.call_soon_threadsafe(event.set)
+    except RuntimeError:  # loop already closed, e.g. during shutdown
+        pass
+
+
+async def run_dispatch_loop(session_factory: Callable[[], Session]) -> None:
+    """Runs `dispatch_pending` whenever `wake` is called, and at least every
+    `dispatch_tick_seconds` as a fallback. Started from app/main.py's lifespan."""
+    global _loop, _wakeup
+    _loop, _wakeup = asyncio.get_running_loop(), asyncio.Event()
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(_wakeup.wait(), timeout=settings.dispatch_tick_seconds)
+            except TimeoutError:
+                pass
+            # Cleared before dispatching, so a wake that lands mid-pass triggers another pass.
+            _wakeup.clear()
+            try:
+                with session_factory() as db:
+                    await dispatch_pending(db)
+            except Exception:
+                logger.exception("Dispatch pass failed")
+    finally:
+        _loop, _wakeup = None, None
 
 
 def expire_overdue(db: Session, now: datetime | None = None, user_id: str | None = None) -> int:
@@ -172,6 +212,8 @@ def requeue_undelivered(db: Session, now: datetime | None = None) -> int:
         {Notification.status: NotificationStatus.pending}, synchronize_session=False
     )
     db.commit()
+    if requeued:
+        wake()
     return given_up + requeued
 
 
@@ -248,4 +290,6 @@ def requeue_unacked(db: Session, now: datetime | None = None) -> int:
         synchronize_session=False,
     )
     db.commit()
+    if requeued:
+        wake()
     return given_up + requeued

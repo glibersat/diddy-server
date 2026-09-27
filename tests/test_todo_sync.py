@@ -4,7 +4,7 @@ from pathlib import Path
 from icalendar import Calendar
 
 from app.models import TodoItem, TodoList
-from app.scheduler.todo import run_todo_list_tick
+from app.scheduler.todo import run_all_todo_ticks, run_todo_list_tick
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_todos.ics"
 
@@ -85,3 +85,20 @@ END:VCALENDAR
 
     items = db_session.query(TodoItem).filter(TodoItem.todo_list_id == todo_list.id).all()
     assert {i.uid for i in items} == {"todo-1@example.com"}
+
+
+def test_run_all_todo_ticks_skips_an_unreachable_list_without_blocking_the_rest(db_session, user, monkeypatch):
+    def fetch(todo_list):
+        if "broken" in todo_list.caldav_url:
+            raise OSError("connection refused")
+        return list(_components(FIXTURE.read_text()))
+
+    monkeypatch.setattr("app.scheduler.todo.fetch_todo_components", fetch)
+    broken = TodoList(user_id=user.id, name="Broken", caldav_url="https://broken.example.com/dav/")
+    working = TodoList(user_id=user.id, name="Groceries", caldav_url="https://caldav.example.com/groceries/")
+    db_session.add_all([broken, working])
+    db_session.commit()
+
+    assert run_all_todo_ticks(db_session, now=datetime(2024, 1, 3, 9, 0, tzinfo=UTC)) > 0
+    assert db_session.query(TodoItem).filter(TodoItem.todo_list_id == working.id).count() > 0
+    assert broken.last_synced_at is None

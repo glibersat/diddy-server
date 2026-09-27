@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Notification, NotificationChannel, ReminderKind, RuleType
+from app.notify.dispatcher import wake
 
 
 def enqueue_notification(
@@ -26,8 +27,8 @@ def enqueue_notification(
     snooze_minutes: list[int] | None = None,
     expires_at: datetime | None = None,
 ) -> Notification | None:
-    """Inserts a `pending` Notification; `dispatch_pending` (dispatcher.py) picks it up from
-    there and sends it over the recipient's WebSocket, retrying per app/config.py's settings
+    """Inserts a `pending` Notification and wakes the dispatch loop; `dispatch_pending`
+    (dispatcher.py) picks it up from there and sends it over the recipient's WebSocket, retrying per app/config.py's settings
     until it's delivered (or, for `channel=reminder`, acked).
 
     Returns None instead of raising if `dedupe_key` collides with an existing row - callers that
@@ -59,4 +60,5 @@ def enqueue_notification(
         db.rollback()
         return None
     db.refresh(notification)
+    wake()
     return notification

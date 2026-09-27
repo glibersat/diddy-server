@@ -142,3 +142,43 @@ def test_run_all_ics_ticks_checks_every_enabled_source_every_call(db_session, us
     created = run_all_ics_ticks(db_session, now=now)
 
     assert created >= 1
+
+
+def test_run_ics_source_tick_falls_back_to_cached_feed_when_refetch_fails(db_session, user, monkeypatch):
+    def unreachable(url_or_path):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", unreachable)
+    synced_at = datetime(2024, 1, 3, 8, 0, tzinfo=UTC)
+    source = IcsSource(
+        user_id=user.id,
+        url_or_path="https://example.com/calendar.ics",
+        offsets_minutes=[30],
+        cached_ics_text=FIXTURE.read_text(),
+        last_synced_at=synced_at,
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    created = run_ics_source_tick(db_session, source, now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
+
+    assert created >= 1  # event-1 at 10:00 still reminded from the cached copy
+    assert source.last_synced_at == synced_at  # not marked fresh, so the next tick retries
+
+
+def test_run_all_ics_ticks_skips_a_broken_source_without_blocking_the_rest(db_session, user, monkeypatch):
+    def fetch(url_or_path):
+        if "broken" in url_or_path:
+            raise OSError("connection refused")
+        return FIXTURE.read_text()
+
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", fetch)
+    broken = IcsSource(user_id=user.id, url_or_path="https://broken.example.com/cal.ics", offsets_minutes=[30])
+    working = IcsSource(user_id=user.id, url_or_path="https://example.com/cal.ics", offsets_minutes=[30])
+    db_session.add_all([broken, working])
+    db_session.commit()
+
+    created = run_all_ics_ticks(db_session, now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
+
+    assert created >= 1
+    assert db_session.query(Notification).filter(Notification.rule_id == working.id).count() >= 1

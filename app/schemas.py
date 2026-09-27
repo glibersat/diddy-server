@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import AckAction, NotificationChannel, NotificationStatus, ReminderKind, RuleType
+from app.netguard import BlockedUrlError, check_public_url
 
 
 def _validate_timezone(value: str) -> str:
@@ -28,6 +29,10 @@ def _validate_http_url(value: str, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a valid http(s) URL") from e
     if scheme not in ("http", "https"):
         raise ValueError(f"{field_name} must be a valid http(s) URL")
+    try:
+        check_public_url(value)
+    except BlockedUrlError as e:
+        raise ValueError(f"{field_name}: {e}") from e
     return value
 
 

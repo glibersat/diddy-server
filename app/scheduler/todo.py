@@ -2,6 +2,7 @@
 app/scheduler/ics.py's VEVENT sync. Notifications aren't created here; a synced list is only a
 source of pending items for app/notify/geofence.py to report when the phone arrives nearby."""
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
 
@@ -10,6 +11,9 @@ from icalendar import Calendar as ICalendar
 from sqlalchemy.orm import Session
 
 from app.models import TodoItem, TodoList
+from app.netguard import check_public_url
+
+logger = logging.getLogger("diddy.scheduler.todo")
 
 
 @dataclass
@@ -36,11 +40,18 @@ def fetch_todo_components(todo_list: TodoList) -> list:
     client = caldav.DAVClient(
         url=todo_list.caldav_url, username=todo_list.username, password=todo_list.password
     )
+    # Fires for every request, redirect hops included - see app/netguard.py.
+    client.session.hooks["pre_request"].append(lambda request, **kwargs: _guard(request))
     calendar = caldav.Calendar(client=client, url=todo_list.caldav_url)
     components = []
     for todo in calendar.todos(include_completed=True):
         components.extend(ICalendar.from_ical(todo.data).walk("VTODO"))
     return components
+
+
+def _guard(request):
+    check_public_url(request.url)
+    return request
 
 
 def _parse_todo(component) -> TodoSummary:
@@ -96,5 +107,11 @@ def run_all_todo_ticks(db: Session, now: datetime | None = None) -> int:
             last_synced_at is None or now - last_synced_at >= timedelta(minutes=todo_list.refresh_minutes)
         )
         if due_for_refresh:
-            total += run_todo_list_tick(db, todo_list, now)
+            # Same isolation as run_all_ics_ticks: one unreachable CalDAV server mustn't stop
+            # every list after it from syncing.
+            try:
+                total += run_todo_list_tick(db, todo_list, now)
+            except Exception:
+                db.rollback()
+                logger.exception("Skipping todo list %s this tick", todo_list.id)
     return total

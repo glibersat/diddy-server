@@ -3,11 +3,11 @@ geofence - see TodoList.place_inside in app/models.py for the entry/exit state t
 from re-firing on every sample while the phone just sits there."""
 
 import math
-from datetime import datetime, UTC
 
 from sqlalchemy.orm import Session
 
-from app.models import Notification, PhoneLocation, RuleType, TodoItem, TodoList
+from app.models import PhoneLocation, RuleType, TodoItem, TodoList
+from app.notify.queue import enqueue_notification
 
 _EARTH_RADIUS_M = 6_371_000
 _MAX_LISTED_ITEMS = 5
@@ -54,21 +54,24 @@ def check_todo_list_geofences(db: Session, user_id: str, location: PhoneLocation
             distance_m(location.latitude, location.longitude, todo_list.place_latitude, todo_list.place_longitude)
             <= todo_list.place_radius_m
         )
-        if inside and not todo_list.place_inside:
-            notification = Notification(
-                user_id=user_id,
+        fire = inside and not todo_list.place_inside
+        # Set before enqueueing: enqueue_notification commits, and that commit should carry the
+        # entry state along with the notification it fired.
+        todo_list.place_inside = inside
+        if fire:
+            notification = enqueue_notification(
+                db,
+                user_id,
                 rule_type=RuleType.place_arrival,
                 rule_id=todo_list.id,
                 dedupe_key=f"place:{todo_list.id}:{location.id}",
-                scheduled_for=datetime.now(UTC),
                 title=f"Near {todo_list.place_label or todo_list.name}",
                 body=_pending_items_body(db, todo_list),
                 kind=todo_list.kind,
                 dismissible=todo_list.dismissible,
                 snooze_minutes=todo_list.snooze_minutes,
             )
-            db.add(notification)
-            created += 1
-        todo_list.place_inside = inside
+            if notification is not None:
+                created += 1
     db.commit()
     return created

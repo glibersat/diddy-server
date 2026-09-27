@@ -37,5 +37,15 @@ class Settings(BaseSettings):
     # `watch_ready` reconnect won't revive it, so a long absence doesn't replay stale reminders.
     notification_ttl_hours: int = 24
 
+    # How long one WebSocket send may take before that socket is treated as dead and dropped -
+    # without it, a single stalled client (full TCP buffer) holds up dispatch for every user.
+    ws_send_timeout_seconds: float = 5
+
+    # ICS feeds and CalDAV lists are fetched server-side from user-supplied URLs, so by default
+    # anything resolving to a loopback/private/link-local address (including via a redirect) is
+    # refused - otherwise any user could make the server probe its own internal network. Set
+    # true for a trusted-LAN deployment whose calendars live on the LAN (Nextcloud, Radicale...).
+    allow_private_feed_urls: bool = False
+
 
 settings = Settings()
