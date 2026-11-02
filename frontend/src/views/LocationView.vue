@@ -153,7 +153,8 @@ onBeforeUnmount(() => {
         <p class="text-sm muted">The line joins the reported points in order. It isn't the exact route.</p>
         <SegmentedControl v-model="rangeKey" :options="rangeOptions" label="Time range" />
       </div>
-      <div ref="mapEl" class="h-96 rounded-xl overflow-hidden"></div>
+      <!-- isolate: Leaflet panes use z-index 400+, which would cover the phone nav bar. -->
+      <div ref="mapEl" class="relative z-0 isolate h-80 sm:h-96 rounded-xl overflow-hidden"></div>
       <p v-if="locations.length" class="text-sm muted px-2 pb-1">
         {{ locations.length }} point{{ locations.length === 1 ? '' : 's' }} in this range
       </p>

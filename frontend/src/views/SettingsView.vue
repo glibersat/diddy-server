@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { clearApiKey, getApiKey, getMe, updateMe, type User } from '../api'
+import { announceSignOut } from '../native'
 import AppIcon from '../components/AppIcon.vue'
 import PageHeader from '../components/PageHeader.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
@@ -69,6 +70,7 @@ async function copyKey() {
 
 function logout() {
   clearApiKey()
+  announceSignOut()
   router.push({ name: 'login' })
 }
 </script>

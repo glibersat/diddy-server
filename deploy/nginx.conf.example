@@ -53,6 +53,15 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # PWA service worker and manifest: always revalidate, or browsers keep running an old
+    # worker (and an old app shell) for up to a day after a deploy.
+    location = /sw.js {
+        add_header Cache-Control "no-cache" always;
+    }
+    location = /manifest.webmanifest {
+        add_header Cache-Control "no-cache" always;
+    }
+
     # Everything below is the API surface from README.md's "API" section, proxied to the
     # backend. Listed explicitly (no blanket `location /`) so a typo'd frontend route can
     # never accidentally fall through to uvicorn or vice versa.
