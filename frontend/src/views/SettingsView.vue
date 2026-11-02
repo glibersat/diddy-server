@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { getMe, updateMe, type User } from '../api'
-import { btnPrimary, card, errorText, input, label, muted } from '../ui'
+import { useRouter } from 'vue-router'
+import { clearApiKey, getApiKey, getMe, updateMe, type User } from '../api'
+import AppIcon from '../components/AppIcon.vue'
+import PageHeader from '../components/PageHeader.vue'
+import ToggleSwitch from '../components/ToggleSwitch.vue'
+
+const router = useRouter()
 
 const user = ref<User | null>(null)
 const loading = ref(true)
@@ -13,6 +18,13 @@ const timezone = ref('')
 const digestEnabled = ref(false)
 const digestTime = ref('08:00')
 
+const timezones: string[] = (Intl as any).supportedValuesOf?.('timeZone') ?? []
+const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+const apiKey = getApiKey() ?? ''
+const keyRevealed = ref(false)
+const copied = ref(false)
+
 async function refresh() {
   loading.value = true
   error.value = ''
@@ -20,9 +32,9 @@ async function refresh() {
     user.value = await getMe()
     timezone.value = user.value.timezone
     digestEnabled.value = user.value.digest_enabled
-    digestTime.value = user.value.digest_time ?? '08:00'
+    digestTime.value = user.value.digest_time?.slice(0, 5) ?? '08:00'
   } catch (e) {
-    error.value = 'Could not load your account'
+    error.value = "Couldn't load your settings. Try again in a moment."
   } finally {
     loading.value = false
   }
@@ -41,57 +53,97 @@ async function save() {
       digest_time: digestEnabled.value ? digestTime.value : null,
     })
     saved.value = true
-    setTimeout(() => (saved.value = false), 2000)
+    setTimeout(() => (saved.value = false), 2500)
   } catch (e: any) {
-    error.value = e?.response?.data?.detail ?? 'Could not save settings'
+    error.value = e?.response?.data?.detail ?? "Couldn't save. Try again."
   } finally {
     saving.value = false
   }
 }
+
+async function copyKey() {
+  await navigator.clipboard.writeText(apiKey)
+  copied.value = true
+  setTimeout(() => (copied.value = false), 1500)
+}
+
+function logout() {
+  clearApiKey()
+  router.push({ name: 'login' })
+}
 </script>
 
 <template>
-  <div>
-    <h2 class="text-base font-semibold">Settings</h2>
-    <p :class="[muted, 'mb-4']">Your account and notification preferences.</p>
+  <div class="space-y-6">
+    <PageHeader title="Settings" />
 
-    <p v-if="loading">Loading…</p>
+    <div v-if="loading" class="card h-48 animate-pulse" aria-busy="true" />
 
-    <form v-else :class="card" class="space-y-4" @submit.prevent="save">
-      <div>
-        <label for="email" :class="label">Email</label>
-        <p id="email">{{ user?.email }}</p>
-      </div>
+    <form v-else class="card space-y-6" @submit.prevent="save">
+      <h2 class="text-lg font-bold">Reminders</h2>
 
       <div>
-        <label for="timezone" :class="label">Timezone</label>
-        <input id="timezone" v-model="timezone" required :class="[input, 'w-full']" />
-      </div>
-
-      <div>
-        <label :class="label">
-          <input type="checkbox" v-model="digestEnabled" class="w-auto inline-block mr-1.5 align-middle" />
-          Send a daily schedule digest
-        </label>
-        <p :class="[muted, 'mb-2']">
-          A once-a-day summary of the day's appointments, sent at the time below (your local
-          timezone) - only on days you have at least one appointment.
+        <label for="timezone" class="field-label">Your timezone</label>
+        <input id="timezone" v-model="timezone" required list="tz-list" class="field" autocomplete="off" />
+        <datalist id="tz-list">
+          <option v-for="tz in timezones" :key="tz" :value="tz" />
+        </datalist>
+        <p class="field-hint">
+          Routines fire at this timezone's local time.
+          <button
+            v-if="browserTz && browserTz !== timezone"
+            type="button"
+            class="font-semibold text-indigo-700 dark:text-indigo-300 underline"
+            @click="timezone = browserTz"
+          >
+            Use {{ browserTz }}
+          </button>
         </p>
-        <input
-          v-if="digestEnabled"
-          id="digest_time"
-          v-model="digestTime"
-          type="time"
-          required
-          :class="input"
-        />
       </div>
 
-      <p v-if="error" :class="errorText">{{ error }}</p>
+      <div class="space-y-2">
+        <ToggleSwitch v-model="digestEnabled" label="Morning summary of my appointments" />
+        <p class="field-hint !mt-0">One message listing the day's appointments. Only sent on days you have some.</p>
+        <div v-if="digestEnabled" class="pt-1">
+          <label for="digest_time" class="field-label">Send it at</label>
+          <input id="digest_time" v-model="digestTime" type="time" required class="field !w-auto tabular-nums" />
+        </div>
+      </div>
 
-      <button type="submit" :disabled="saving" :class="btnPrimary">
-        {{ saving ? 'Saving…' : saved ? 'Saved!' : 'Save' }}
-      </button>
+      <p v-if="error" class="error-box" role="alert">{{ error }}</p>
+
+      <div class="flex items-center gap-3">
+        <button type="submit" :disabled="saving" class="btn btn-primary">{{ saving ? 'Saving…' : 'Save' }}</button>
+        <span v-if="saved" class="font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1.5" role="status">
+          <AppIcon name="check" :size="18" /> Saved
+        </span>
+      </div>
     </form>
+
+    <section class="card space-y-5">
+      <h2 class="text-lg font-bold">Account</h2>
+      <div>
+        <p class="field-label">Email</p>
+        <p>{{ user?.email ?? '—' }}</p>
+      </div>
+      <div>
+        <p class="field-label">API key</p>
+        <p class="field-hint !mt-0 mb-2">Paste this into the companion app on your phone. Keep it private.</p>
+        <div class="flex flex-wrap items-center gap-2">
+          <code class="rounded-lg bg-stone-100 dark:bg-stone-800 px-3 py-2 font-mono text-sm break-all">
+            {{ keyRevealed ? apiKey : '•'.repeat(24) }}
+          </code>
+          <button type="button" class="btn btn-secondary" @click="keyRevealed = !keyRevealed">
+            {{ keyRevealed ? 'Hide' : 'Show' }}
+          </button>
+          <button type="button" class="btn btn-secondary" @click="copyKey">
+            <AppIcon v-if="copied" name="check" :size="18" /> {{ copied ? 'Copied' : 'Copy' }}
+          </button>
+        </div>
+      </div>
+      <div class="pt-2 border-t border-stone-100 dark:border-stone-800">
+        <button type="button" class="btn btn-ghost !px-0" @click="logout"><AppIcon name="logout" :size="18" /> Log out</button>
+      </div>
+    </section>
   </div>
 </template>

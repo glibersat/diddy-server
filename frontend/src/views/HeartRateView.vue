@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   Chart,
   LinearScale,
@@ -13,7 +13,9 @@ import {
 import annotationPlugin, { type AnnotationOptions } from 'chartjs-plugin-annotation'
 import 'chartjs-adapter-date-fns'
 import { listHeartRate, listNotifications, type HeartRateReading, type Notification } from '../api'
-import { card, muted } from '../ui'
+import EmptyState from '../components/EmptyState.vue'
+import PageHeader from '../components/PageHeader.vue'
+import SegmentedControl from '../components/SegmentedControl.vue'
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, annotationPlugin)
 
@@ -25,12 +27,17 @@ interface Range {
 }
 
 const RANGES: Range[] = [
-  { key: 'daily', label: 'Daily', hours: 24, unit: 'hour' },
-  { key: '3day', label: '3 Days', hours: 72, unit: 'day' },
-  { key: 'weekly', label: 'Weekly', hours: 24 * 7, unit: 'day' },
+  { key: 'daily', label: 'Day', hours: 24, unit: 'hour' },
+  { key: '3day', label: '3 days', hours: 72, unit: 'day' },
+  { key: 'weekly', label: 'Week', hours: 24 * 7, unit: 'day' },
 ]
 
 const selectedRange = ref<Range>(RANGES[0])
+const rangeKey = computed({
+  get: () => selectedRange.value.key,
+  set: (k: string) => (selectedRange.value = RANGES.find((r) => r.key === k) ?? RANGES[0]),
+})
+const rangeOptions = RANGES.map((r) => ({ value: r.key, label: r.label }))
 const readings = ref<HeartRateReading[]>([])
 const medicationAcks = ref<Notification[]>([])
 const loading = ref(true)
@@ -123,8 +130,8 @@ function renderChart() {
       {
         label: 'Heart rate',
         data: readings.value.map((r) => ({ x: new Date(r.recorded_at).getTime(), y: r.bpm })),
-        borderColor: '#6366f1',
-        backgroundColor: '#6366f1',
+        borderColor: '#e11d48',
+        backgroundColor: '#e11d48',
         pointRadius: readings.value.length > 150 ? 0 : 2,
         borderWidth: 2,
         tension: 0.25,
@@ -172,45 +179,31 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <div class="flex justify-between items-center flex-wrap gap-3">
-      <h2 class="text-base font-semibold">Heart Rate</h2>
-      <div class="flex gap-1.5">
-        <button
-          v-for="r in RANGES"
-          :key="r.key"
-          type="button"
-          class="rounded-md px-3 py-1.5 text-sm"
-          :class="
-            selectedRange.key === r.key
-              ? 'bg-indigo-600 text-white'
-              : 'bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100'
-          "
-          @click="selectedRange = r"
-        >
-          {{ r.label }}
-        </button>
-      </div>
-    </div>
-    <p :class="[muted, 'mb-4']">
-      Readings from the watch's Heart Rate Service - spot checks and periodic background samples
-      alike. 💊 marks a medication reminder marked DONE, to see its effect on heart rate.
-    </p>
+    <PageHeader title="Heart rate" subtitle="Readings from your watch. The 💊 lines show when you marked a medication as done.">
+      <SegmentedControl v-model="rangeKey" :options="rangeOptions" label="Time range" />
+    </PageHeader>
 
-    <p v-if="loading">Loading…</p>
-    <p v-else-if="error" class="text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-    <p v-else-if="!readings.length" :class="muted">No heart rate readings in this range yet.</p>
+    <p v-if="error" class="error-box mb-4" role="alert">{{ error }}</p>
+    <div v-else-if="loading" class="card h-80 animate-pulse" aria-busy="true" />
+    <EmptyState v-else-if="!readings.length" icon="heart" title="No readings yet" text="Nothing from your watch in this time range." />
 
-    <div v-show="!loading && !error && readings.length" :class="card">
-      <div class="h-72">
-        <canvas ref="canvasEl"></canvas>
+    <div v-show="!loading && !error && readings.length" class="space-y-4">
+      <div v-if="average != null" class="grid grid-cols-2 gap-3">
+        <div class="card">
+          <p class="text-sm font-semibold muted">Average</p>
+          <p class="text-3xl font-bold tabular-nums">{{ average }} <span class="text-base font-semibold muted">bpm</span></p>
+        </div>
+        <div class="card">
+          <p class="text-sm font-semibold muted">Medication done</p>
+          <p class="text-3xl font-bold tabular-nums">{{ medicationAcks.length }} <span class="text-base font-semibold muted">times</span></p>
+        </div>
       </div>
-      <p v-if="average != null" :class="[muted, 'mt-3']">
-        Average: {{ average }} bpm over {{ readings.length }} reading{{ readings.length === 1 ? '' : 's' }}
-        <span v-if="medicationAcks.length">
-          · {{ medicationAcks.length }} medication dose{{ medicationAcks.length === 1 ? '' : 's' }} marked DONE in
-          this range
-        </span>
-      </p>
+      <div class="card">
+        <div class="h-72">
+          <canvas ref="canvasEl" aria-label="Heart rate chart" role="img"></canvas>
+        </div>
+        <p class="text-sm muted mt-3">{{ readings.length }} reading{{ readings.length === 1 ? '' : 's' }} in this range</p>
+      </div>
     </div>
   </div>
 </template>
