@@ -1,118 +1,90 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { clearApiKey, getApiKey } from './api'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import AppIcon from './components/AppIcon.vue'
+import { PRIMARY_NAV, SECONDARY_NAV } from './nav'
 
 const route = useRoute()
-const router = useRouter()
-const loggedIn = ref(!!getApiKey())
-const apiKey = computed(() => getApiKey() ?? '')
-const keyRevealed = ref(false)
-const copied = ref(false)
-
 const showNav = computed(() => route.name !== 'login')
-
-function logout() {
-  clearApiKey()
-  loggedIn.value = false
-  router.push({ name: 'login' })
-}
-
-async function copyKey() {
-  await navigator.clipboard.writeText(apiKey.value)
-  copied.value = true
-  setTimeout(() => (copied.value = false), 1500)
-}
+const inSecondary = computed(() => route.path === '/more' || SECONDARY_NAV.some((n) => route.path.startsWith(n.to)))
 </script>
 
 <template>
-  <div class="max-w-3xl mx-auto p-6">
-    <header
-      v-if="showNav"
-      class="mb-8 pb-4 border-b border-neutral-200 dark:border-neutral-800"
-    >
-      <div class="flex items-center gap-6">
-        <h1 class="text-lg font-semibold m-0">Diddy Reminders</h1>
-        <nav class="flex gap-4 flex-1">
-          <RouterLink
-            to="/schedules"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Daily Reminders
-          </RouterLink>
-          <RouterLink
-            to="/ics-sources"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            ICS Sources
-          </RouterLink>
-          <RouterLink
-            to="/todo-lists"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Todo Lists
-          </RouterLink>
-          <RouterLink
-            to="/notifications"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Notifications
-          </RouterLink>
-          <RouterLink
-            to="/heart-rate"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Heart Rate
-          </RouterLink>
-          <RouterLink
-            to="/location"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Location
-          </RouterLink>
-          <RouterLink
-            to="/settings"
-            class="py-1 text-neutral-500 dark:text-neutral-400 no-underline border-b-2 border-transparent"
-            active-class="!text-neutral-900 dark:!text-neutral-100 !border-indigo-500"
-          >
-            Settings
-          </RouterLink>
-        </nav>
-        <button
-          class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-4 py-2 cursor-pointer"
-          @click="logout"
-        >
-          Log out
-        </button>
-      </div>
+  <div v-if="!showNav">
+    <RouterView />
+  </div>
 
-      <div class="flex items-center gap-2 mt-3 text-sm text-neutral-500 dark:text-neutral-400">
-        <span>API key:</span>
-        <code class="font-mono">{{ keyRevealed ? apiKey : '•'.repeat(24) }}</code>
-        <button
-          type="button"
-          class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-2 py-0.5 text-xs cursor-pointer"
-          @click="keyRevealed = !keyRevealed"
+  <div v-else class="min-h-screen md:flex">
+    <!-- Desktop sidebar -->
+    <aside
+      class="hidden md:flex md:flex-col md:w-64 md:shrink-0 md:sticky md:top-0 md:h-screen border-r border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 px-4 py-6"
+    >
+      <RouterLink to="/today" class="flex items-center gap-2.5 px-3 mb-8 no-underline">
+        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white">
+          <AppIcon name="bell" :size="20" />
+        </span>
+        <span class="text-lg font-bold">Diddy</span>
+      </RouterLink>
+
+      <nav aria-label="Main" class="flex flex-col gap-1">
+        <RouterLink
+          v-for="n in PRIMARY_NAV"
+          :key="n.to"
+          :to="n.to"
+          class="flex items-center gap-3 rounded-xl px-3 py-2.5 font-semibold text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
+          active-class="!bg-indigo-50 !text-indigo-700 dark:!bg-indigo-950 dark:!text-indigo-200"
         >
-          {{ keyRevealed ? 'Hide' : 'Show' }}
-        </button>
-        <button
-          type="button"
-          class="bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 rounded-md px-2 py-0.5 text-xs cursor-pointer"
-          @click="copyKey"
+          <AppIcon :name="n.icon" :size="22" />
+          {{ n.label }}
+        </RouterLink>
+      </nav>
+
+      <p class="mt-8 mb-2 px-3 text-xs font-bold uppercase tracking-wider muted">More</p>
+      <nav aria-label="More" class="flex flex-col gap-1">
+        <RouterLink
+          v-for="n in SECONDARY_NAV"
+          :key="n.to"
+          :to="n.to"
+          class="flex items-center gap-3 rounded-xl px-3 py-2 text-stone-600 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
+          active-class="!bg-indigo-50 !text-indigo-700 dark:!bg-indigo-950 dark:!text-indigo-200 font-semibold"
         >
-          {{ copied ? 'Copied!' : 'Copy' }}
-        </button>
+          <AppIcon :name="n.icon" :size="20" />
+          {{ n.label }}
+        </RouterLink>
+      </nav>
+    </aside>
+
+    <main class="flex-1 min-w-0 px-5 pt-6 pb-28 md:px-10 md:pt-10 md:pb-12">
+      <div class="mx-auto max-w-3xl">
+        <RouterView />
       </div>
-    </header>
-    <main>
-      <RouterView />
     </main>
+
+    <!-- Phone bottom bar -->
+    <nav
+      aria-label="Main"
+      class="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 dark:border-stone-800 bg-white/95 dark:bg-stone-900/95 backdrop-blur pb-[env(safe-area-inset-bottom)]"
+    >
+      <div class="grid grid-cols-5">
+        <RouterLink
+          v-for="n in PRIMARY_NAV"
+          :key="n.to"
+          :to="n.to"
+          class="flex flex-col items-center gap-0.5 py-2.5 text-xs font-semibold text-stone-500 dark:text-stone-400"
+          active-class="!text-indigo-600 dark:!text-indigo-300"
+        >
+          <AppIcon :name="n.icon" :size="24" />
+          {{ n.label }}
+        </RouterLink>
+        <RouterLink
+          to="/more"
+          class="flex flex-col items-center gap-0.5 py-2.5 text-xs font-semibold"
+          :class="inSecondary ? 'text-indigo-600 dark:text-indigo-300' : 'text-stone-500 dark:text-stone-400'"
+        >
+          <AppIcon name="more" :size="24" />
+          More
+        </RouterLink>
+      </div>
+    </nav>
   </div>
 </template>

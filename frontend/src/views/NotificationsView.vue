@@ -1,39 +1,33 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { getNextNotification, listNotifications, sendAlert, type NextReminder, type Notification } from '../api'
-import { card, muted } from '../ui'
+import { listNotifications, type Notification } from '../api'
+import AppIcon from '../components/AppIcon.vue'
+import EmptyState from '../components/EmptyState.vue'
+import PageHeader from '../components/PageHeader.vue'
+import SegmentedControl from '../components/SegmentedControl.vue'
+import { KINDS, headline } from '../kinds'
+import { clock, friendlyDateTime } from '../time'
 
-type ViewMode = 'snoozed' | 'delivered' | 'all'
+type ViewMode = 'all' | 'snoozed' | 'delivered'
 
 const notifications = ref<Notification[]>([])
-const nextUp = ref<NextReminder | null>(null)
 const loading = ref(true)
 const error = ref('')
-const mode = ref<ViewMode>('snoozed')
+const mode = ref<ViewMode>('all')
 
-const testAlertStatus = ref<'idle' | 'sending' | 'sent' | 'unreachable'>('idle')
-
-async function sendTestAlert() {
-  testAlertStatus.value = 'sending'
-  try {
-    const delivered = await sendAlert('Test alert from the web UI')
-    testAlertStatus.value = delivered ? 'sent' : 'unreachable'
-  } catch (e) {
-    testAlertStatus.value = 'unreachable'
-  } finally {
-    setTimeout(() => (testAlertStatus.value = 'idle'), 2000)
-  }
-}
+const MODES: { value: ViewMode; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'snoozed', label: 'Snoozed' },
+  { value: 'delivered', label: 'Delivered' },
+]
 
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [notifs, next] = await Promise.all([listNotifications(20), getNextNotification()])
-    notifications.value = notifs
-    nextUp.value = next
+    notifications.value = await listNotifications(50)
   } catch (e) {
-    error.value = 'Could not load notifications'
+    error.value = "Couldn't load your history. Try again in a moment."
   } finally {
     loading.value = false
   }
@@ -52,95 +46,114 @@ const visible = computed(() => {
   return notifications.value
 })
 
-function formatDateTime(iso: string | null): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString()
+function dayLabel(iso: string): string {
+  const d = new Date(iso)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
-/** How late (or, in principle, early) a `delivered` confirmation landed vs. when the reminder was
- * scheduled to fire - the gap covers dispatch latency plus any time spent waiting for the watch
- * to reconnect. */
-function formatDelay(scheduledFor: string, deliveredAt: string): string {
-  const deltaSeconds = Math.round((new Date(deliveredAt).getTime() - new Date(scheduledFor).getTime()) / 1000)
-  if (deltaSeconds <= 1) return 'on time'
-  const minutes = Math.floor(deltaSeconds / 60)
-  const seconds = deltaSeconds % 60
-  return minutes > 0 ? `+${minutes}m ${seconds}s` : `+${seconds}s`
+/** Grouped by day so a long list has landmarks. */
+const groups = computed(() => {
+  const out: { label: string; items: Notification[] }[] = []
+  for (const n of visible.value) {
+    const label = dayLabel(mode.value === 'delivered' ? n.delivered_at! : n.scheduled_for)
+    const last = out.at(-1)
+    if (last?.label === label) last.items.push(n)
+    else out.push({ label, items: [n] })
+  }
+  return out
+})
+
+interface Status {
+  label: string
+  class: string
+}
+
+function status(n: Notification): Status {
+  if (n.ack_action === 'dismissed')
+    return { label: 'Done', class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' }
+  if (n.ack_action === 'snoozed')
+    return {
+      label: `Snoozed ${n.ack_snoozed_minutes} min`,
+      class: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
+    }
+  if (n.status === 'failed') return { label: "Couldn't send", class: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200' }
+  if (n.status === 'pending') return { label: 'Waiting', class: 'bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300' }
+  if (n.delivered_at) return { label: 'On watch', class: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' }
+  return { label: 'Sent', class: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' }
+}
+
+/** How late the watch confirmed delivery vs. the planned time (dispatch latency + reconnects). */
+function delay(n: Notification): string | null {
+  if (!n.delivered_at) return null
+  const s = Math.round((new Date(n.delivered_at).getTime() - new Date(n.scheduled_for).getTime()) / 1000)
+  if (s <= 60) return null
+  const m = Math.round(s / 60)
+  return `arrived ${m} min late`
 }
 
 /**
  * The watch re-arms a snoozed reminder entirely on its own (see ReminderService.md in the
- * firmware fork) - the server is never told, so this is a computed estimate from acked_at +
- * ack_snoozed_minutes, not something the backend actually schedules or can confirm happened.
+ * firmware fork) - the server is never told, so this is an estimate from acked_at +
+ * ack_snoozed_minutes, not something the backend schedules or can confirm.
  */
-function formatRetrigger(n: Notification): string {
-  if (!n.acked_at || n.ack_snoozed_minutes == null) return '—'
-  const at = new Date(n.acked_at)
-  at.setMinutes(at.getMinutes() + n.ack_snoozed_minutes)
-  return at.toLocaleString()
+function retrigger(n: Notification): string | null {
+  if (n.ack_action !== 'snoozed' || !n.acked_at || n.ack_snoozed_minutes == null) return null
+  const at = new Date(new Date(n.acked_at).getTime() + n.ack_snoozed_minutes * 60_000)
+  return `back around ${friendlyDateTime(at.toISOString())}`
 }
 </script>
 
 <template>
   <div>
-    <div class="flex justify-between items-center flex-wrap gap-3">
-      <h2 class="text-base font-semibold">Notifications</h2>
-      <div class="flex items-center gap-3 flex-wrap">
-        <button
-          type="button"
-          class="rounded-md px-3 py-1.5 text-sm bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 disabled:opacity-60"
-          :disabled="testAlertStatus === 'sending'"
-          @click="sendTestAlert"
-        >
-          {{
-            testAlertStatus === 'sending'
-              ? 'Sending…'
-              : testAlertStatus === 'sent'
-                ? 'Sent!'
-                : testAlertStatus === 'unreachable'
-                  ? 'Phone unreachable'
-                  : 'Send test alert'
-          }}
-        </button>
-        <select v-model="mode" class="text-sm w-auto">
-          <option value="snoozed">Snoozed</option>
-          <option value="delivered">Delivered</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-    </div>
-    <p :class="[muted, 'mb-4']">Outbox of everything sent to the watch, most recent first.</p>
+    <PageHeader title="History" subtitle="Everything sent to your watch, newest first.">
+      <button class="btn btn-ghost" :disabled="loading" @click="refresh"><AppIcon name="refresh" :size="18" /> Refresh</button>
+    </PageHeader>
 
-    <p v-if="loading">Loading…</p>
-    <p v-else-if="error" class="text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-    <p v-else-if="!visible.length" :class="muted">
-      {{ mode === 'snoozed' ? 'No snoozed notifications.' : mode === 'delivered' ? 'Nothing delivered yet.' : 'No notifications yet.' }}
-    </p>
-
-    <div v-for="n in visible" :key="n.id" :class="[card, 'flex justify-between items-start flex-wrap gap-3']">
-      <div>
-        <div class="font-medium">{{ n.title }}</div>
-        <div :class="[muted, 'whitespace-pre-line']">{{ n.body }}</div>
-        <div :class="[muted, 'mt-1']">
-          Scheduled {{ formatDateTime(n.scheduled_for) }} · {{ n.kind }}
-          <span v-if="mode === 'delivered' && n.delivered_at">
-            · delivered at {{ formatDateTime(n.delivered_at) }} ({{ formatDelay(n.scheduled_for, n.delivered_at) }})
-          </span>
-          <span v-else-if="n.ack_action === 'snoozed'">
-            · snoozed {{ n.ack_snoozed_minutes }}m at {{ formatDateTime(n.acked_at) }} · re-fires on-watch at
-            {{ formatRetrigger(n) }}
-          </span>
-          <span v-else-if="n.ack_action === 'dismissed'"> · dismissed at {{ formatDateTime(n.acked_at) }}</span>
-          <span v-else> · {{ n.status }}</span>
-        </div>
-      </div>
+    <div class="mb-6">
+      <SegmentedControl v-model="mode" :options="MODES" label="Show" />
     </div>
 
-    <div v-if="mode === 'snoozed' && !loading && nextUp" :class="[card, 'border-dashed']">
-      <div :class="[muted, 'text-xs uppercase tracking-wide mb-1']">Next up</div>
-      <div class="font-medium">{{ nextUp.title }}</div>
-      <div :class="[muted, 'whitespace-pre-line']">{{ nextUp.body }}</div>
-      <div :class="[muted, 'mt-1']">Expected {{ formatDateTime(nextUp.scheduled_for) }} · {{ nextUp.kind }}</div>
+    <p v-if="error" class="error-box mb-4" role="alert">{{ error }}</p>
+
+    <div v-if="loading" class="space-y-3" aria-busy="true">
+      <div v-for="i in 4" :key="i" class="card h-16 animate-pulse" />
+    </div>
+
+    <EmptyState
+      v-else-if="!visible.length"
+      icon="history"
+      :title="mode === 'snoozed' ? 'Nothing snoozed' : mode === 'delivered' ? 'Nothing delivered yet' : 'Nothing sent yet'"
+      text="Reminders will show up here once they've been sent to your watch."
+    />
+
+    <div v-else class="space-y-6">
+      <section v-for="g in groups" :key="g.label">
+        <h2 class="text-sm font-bold uppercase tracking-wider muted mb-2">{{ g.label }}</h2>
+        <ul class="space-y-2">
+          <li v-for="n in g.items" :key="n.id" class="card !py-3.5 flex items-start gap-3.5">
+            <span class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" :class="KINDS[n.kind].badge">
+              <AppIcon :name="KINDS[n.kind].icon" :size="20" />
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-start justify-between gap-3">
+                <p class="font-semibold break-words">{{ headline(n).main }}</p>
+                <span class="rounded-full px-2.5 py-1 text-xs font-bold shrink-0" :class="status(n).class">{{ status(n).label }}</span>
+              </div>
+              <p v-if="headline(n).sub" class="text-sm muted whitespace-pre-line line-clamp-3">{{ headline(n).sub }}</p>
+              <p class="text-sm muted mt-0.5">
+                <span class="tabular-nums">{{ clock(new Date(n.scheduled_for)) }}</span>
+                <template v-if="delay(n)"> · {{ delay(n) }}</template>
+                <template v-if="retrigger(n)"> · {{ retrigger(n) }}</template>
+              </p>
+            </div>
+          </li>
+        </ul>
+      </section>
     </div>
   </div>
 </template>

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
 import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 import { listLocations, ringPhone, type PhoneLocation } from '../api'
-import { card, muted } from '../ui'
+import AppIcon from '../components/AppIcon.vue'
+import PageHeader from '../components/PageHeader.vue'
+import SegmentedControl from '../components/SegmentedControl.vue'
+import { friendlyDateTime, relative } from '../time'
 
 // Vite doesn't rewrite Leaflet's built-in image URLs to hashed asset paths - point the default
 // icon at the bundled assets explicitly, or markers render as broken images.
@@ -23,12 +26,18 @@ interface Range {
 }
 
 const RANGES: Range[] = [
-  { key: 'daily', label: 'Last 24h', hours: 24 },
-  { key: '3day', label: 'Last 3 Days', hours: 72 },
-  { key: 'weekly', label: 'Last Week', hours: 24 * 7 },
+  { key: 'daily', label: '24 h', hours: 24 },
+  { key: '3day', label: '3 days', hours: 72 },
+  { key: 'weekly', label: 'Week', hours: 24 * 7 },
 ]
 
 const selectedRange = ref<Range>(RANGES[0])
+const rangeKey = computed({
+  get: () => selectedRange.value.key,
+  set: (k: string) => selectRange(RANGES.find((r) => r.key === k) ?? RANGES[0]),
+})
+const rangeOptions = RANGES.map((r) => ({ value: r.key, label: r.label }))
+const latest = computed(() => locations.value.at(-1) ?? null)
 const locations = ref<PhoneLocation[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -38,17 +47,17 @@ let map: L.Map | null = null
 let trail: L.Polyline | null = null
 let latestMarker: L.Marker | null = null
 
-const ringStatus = ref<'idle' | 'ringing' | 'unreachable'>('idle')
+const ringStatus = ref<'idle' | 'sending' | 'ringing' | 'unreachable'>('idle')
 
 async function ring() {
-  ringStatus.value = 'ringing'
+  ringStatus.value = 'sending'
   try {
     const delivered = await ringPhone()
     ringStatus.value = delivered ? 'ringing' : 'unreachable'
   } catch (e) {
     ringStatus.value = 'unreachable'
   } finally {
-    setTimeout(() => (ringStatus.value = 'idle'), 2000)
+    setTimeout(() => (ringStatus.value = 'idle'), 3000)
   }
 }
 
@@ -87,12 +96,12 @@ function renderMap() {
 
   const points: [number, number][] = locations.value.map((l) => [l.latitude, l.longitude])
 
-  trail = L.polyline(points, { color: '#6366f1', weight: 3, opacity: 0.6 }).addTo(map)
+  trail = L.polyline(points, { color: '#4f46e5', weight: 3, opacity: 0.6 }).addTo(map)
 
   const latest = locations.value[locations.value.length - 1]
   latestMarker = L.marker([latest.latitude, latest.longitude])
     .addTo(map)
-    .bindPopup(`Last seen ${new Date(latest.recorded_at).toLocaleString()}`)
+    .bindPopup(`Last seen ${friendlyDateTime(latest.recorded_at)}`)
     .openPopup()
 
   map.fitBounds(trail.getBounds().pad(0.2), { maxZoom: 16 })
@@ -112,51 +121,41 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div>
-    <div class="flex justify-between items-center flex-wrap gap-3">
-      <h2 class="text-base font-semibold">Where's My Phone</h2>
-      <div class="flex items-center gap-3 flex-wrap">
-        <div class="flex gap-1.5">
-          <button
-            v-for="r in RANGES"
-            :key="r.key"
-            type="button"
-            class="rounded-md px-3 py-1.5 text-sm"
-            :class="
-              selectedRange.key === r.key
-                ? 'bg-indigo-600 text-white'
-                : 'bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100'
-            "
-            @click="selectRange(r)"
-          >
-            {{ r.label }}
-          </button>
-        </div>
-        <button
-          type="button"
-          class="rounded-md px-3 py-1.5 text-sm bg-transparent border border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 disabled:opacity-60"
-          :disabled="ringStatus === 'ringing'"
-          @click="ring"
-        >
-          {{ ringStatus === 'ringing' ? 'Ringing…' : ringStatus === 'unreachable' ? 'Phone unreachable' : 'Ring phone' }}
-        </button>
+  <div class="space-y-4">
+    <PageHeader title="Find my phone" subtitle="Where your phone last reported its position (about every 30 minutes)." />
+
+    <div class="card flex flex-wrap items-center gap-4">
+      <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300">
+        <AppIcon name="phone" :size="26" />
+      </span>
+      <div class="flex-1 min-w-40">
+        <p class="font-semibold">{{ latest ? `Seen ${relative(latest.recorded_at)}` : 'No position yet' }}</p>
+        <p class="text-sm muted">{{ latest ? friendlyDateTime(latest.recorded_at) : 'Nothing reported in this range.' }}</p>
       </div>
+      <button type="button" class="btn btn-primary" :disabled="ringStatus === 'sending'" @click="ring">
+        <AppIcon name="bell" :size="18" />
+        {{
+          ringStatus === 'sending'
+            ? 'Calling…'
+            : ringStatus === 'ringing'
+              ? 'Ringing!'
+              : ringStatus === 'unreachable'
+                ? "Phone isn't connected"
+                : 'Ring my phone'
+        }}
+      </button>
     </div>
-    <p :class="[muted, 'mb-4']">
-      Positions reported by the companion app roughly every 30 minutes. The line is just samples
-      joined in order, not an actual route.
-    </p>
 
-    <p v-if="error" class="text-sm text-red-600 dark:text-red-400 mb-4">{{ error }}</p>
-    <p v-else-if="!loading && !locations.length" :class="[muted, 'mb-4']">
-      No location reported in this range yet.
-    </p>
+    <p v-if="error" class="error-box" role="alert">{{ error }}</p>
 
-    <div :class="card">
-      <div ref="mapEl" class="h-96 rounded-lg overflow-hidden"></div>
-      <p v-if="locations.length" :class="[muted, 'mt-3']">
-        Last seen {{ new Date(locations[locations.length - 1].recorded_at).toLocaleString() }}
-        · {{ locations.length }} sample{{ locations.length === 1 ? '' : 's' }} in this range
+    <div class="card !p-3 space-y-3">
+      <div class="flex items-center justify-between gap-3 flex-wrap px-2 pt-1">
+        <p class="text-sm muted">The line joins the reported points in order. It isn't the exact route.</p>
+        <SegmentedControl v-model="rangeKey" :options="rangeOptions" label="Time range" />
+      </div>
+      <div ref="mapEl" class="h-96 rounded-xl overflow-hidden"></div>
+      <p v-if="locations.length" class="text-sm muted px-2 pb-1">
+        {{ locations.length }} point{{ locations.length === 1 ? '' : 's' }} in this range
       </p>
     </div>
   </div>
