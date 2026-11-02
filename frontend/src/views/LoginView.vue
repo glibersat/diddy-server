@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { clearApiKey, createUser, getMe, setApiKey } from '../api'
+import axios from 'axios'
+import { apiDetail, clearApiKey, connectionProblem, createUser, getMe, serverLabel, setApiKey } from '../api'
 import AppIcon from '../components/AppIcon.vue'
 import SegmentedControl from '../components/SegmentedControl.vue'
 
@@ -22,8 +23,8 @@ async function handleCreate() {
     const user = await createUser(email.value, timezone.value)
     setApiKey(user.api_key)
     router.push({ name: 'today' })
-  } catch (e: any) {
-    error.value = e?.response?.data?.detail ?? "Couldn't create your account. Try again."
+  } catch (e) {
+    error.value = connectionProblem(e) ?? apiDetail(e) ?? "Couldn't create your account. Try again."
   } finally {
     loading.value = false
   }
@@ -36,9 +37,17 @@ async function handleExisting() {
     setApiKey(apiKeyInput.value.trim())
     await getMe()
     router.push({ name: 'today' })
-  } catch (e: any) {
+  } catch (e) {
+    // Never keep an unverified key: the router would let us in and every screen would fail.
+    // The key stays in the input, so retrying is one tap.
     clearApiKey()
-    error.value = "That key didn't work. Check it and try again."
+    const status = axios.isAxiosError(e) ? e.response?.status : undefined
+    if (status === 401 || status === 403) {
+      error.value = `The server at ${serverLabel()} didn't recognise that key. Check it and try again.`
+    } else {
+      const problem = connectionProblem(e) ?? "Couldn't check your key. Try again."
+      error.value = `${problem} Your key is still in the box.`
+    }
   } finally {
     loading.value = false
   }

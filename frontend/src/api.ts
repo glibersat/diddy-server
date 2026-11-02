@@ -26,6 +26,36 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+/** "localhost:8000" - shown in errors so a wrong or stopped server is easy to spot. */
+export function serverLabel(): string {
+  try {
+    return new URL(API_BASE).host
+  } catch {
+    return API_BASE
+  }
+}
+
+/**
+ * Plain-language message when the request failed because of the server or the network rather
+ * than what the user typed. Null when the server answered with a 4xx: the caller decides.
+ */
+export function connectionProblem(e: unknown): string | null {
+  if (!axios.isAxiosError(e)) return null
+  if (!e.response) {
+    return `Can't reach the Diddy server at ${serverLabel()}. Check that it's running, then try again.`
+  }
+  if (e.response.status >= 500) {
+    return `The server had a problem (error ${e.response.status}). Try again in a moment.`
+  }
+  return null
+}
+
+/** The API's `detail` when it's a readable sentence (FastAPI validation errors are lists). */
+export function apiDetail(e: unknown): string | null {
+  const detail = axios.isAxiosError(e) ? e.response?.data?.detail : null
+  return typeof detail === 'string' ? detail : null
+}
+
 export type ReminderKind = 'generic' | 'medication' | 'appointment'
 
 export interface User {
