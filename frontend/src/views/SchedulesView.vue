@@ -176,16 +176,17 @@ async function setEnabled(s: DailySchedule, enabled: boolean) {
             <span class="w-1.5 shrink-0" :class="s.enabled ? KINDS[s.kind].stripe : 'bg-stone-300 dark:bg-stone-700'" aria-hidden="true" />
             <button
               type="button"
-              class="flex flex-1 items-center gap-4 px-4 py-3.5 text-left min-w-0 hover:bg-stone-50 dark:hover:bg-stone-800/50"
+              class="flex flex-1 flex-col items-start gap-0.5 px-4 py-3.5 text-left min-w-0 sm:flex-row sm:items-center sm:gap-4 hover:bg-stone-50 dark:hover:bg-stone-800/50"
               :aria-label="`Edit ${s.message}`"
               @click="openEdit(s)"
             >
-              <span class="tabular-nums text-xl font-bold w-16 shrink-0">{{ shortTime(s.time_of_day) }}</span>
-              <span class="min-w-0 flex-1">
+              <!-- Phones: time above the text, so the text gets the full row width. -->
+              <span class="tabular-nums text-xl font-bold leading-tight sm:w-16 sm:shrink-0">{{ shortTime(s.time_of_day) }}</span>
+              <span class="min-w-0 w-full sm:flex-1">
                 <span class="block font-semibold break-words">{{ s.message }}</span>
-                <span class="text-sm muted inline-flex items-center gap-1.5 flex-wrap">
-                  <AppIcon :name="KINDS[s.kind].icon" :size="14" />
-                  {{ KINDS[s.kind].label }} · {{ describeMask(s.weekdays_mask) }}
+                <span class="text-sm muted flex items-start gap-1.5">
+                  <AppIcon :name="KINDS[s.kind].icon" :size="14" class="shrink-0 mt-1" />
+                  <span>{{ KINDS[s.kind].label }} · {{ describeMask(s.weekdays_mask) }}</span>
                 </span>
               </span>
               <AppIcon name="pencil" :size="18" class="muted shrink-0 hidden sm:block" />

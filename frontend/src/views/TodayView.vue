@@ -227,14 +227,17 @@ async function quick(which: 'ring' | 'test', action: () => Promise<boolean>) {
               :class="{ 'opacity-60': r.state === 'done' || r.state === 'missed' }"
             >
               <span class="w-1.5 shrink-0" :class="KINDS[r.schedule.kind].stripe" aria-hidden="true" />
-              <div class="flex flex-1 items-center gap-4 px-4 py-3 min-w-0">
-                <span class="tabular-nums text-lg font-bold w-14 shrink-0">{{ r.time }}</span>
-                <span class="flex-1 min-w-0">
-                  <span class="block font-semibold break-words" :class="{ 'line-through': r.state === 'done' }">
-                    {{ r.schedule.message }}
-                  </span>
-                  <span class="text-sm muted inline-flex items-center gap-1">
-                    <AppIcon :name="KINDS[r.schedule.kind].icon" :size="14" /> {{ KINDS[r.schedule.kind].label }}
+              <div class="flex flex-1 items-center gap-3 sm:gap-4 px-4 py-3 min-w-0">
+                <!-- Phones: time above the text, so the text gets the full row width. -->
+                <span class="flex-1 min-w-0 sm:flex sm:items-center sm:gap-4">
+                  <span class="block tabular-nums text-lg font-bold leading-tight sm:w-14 sm:shrink-0">{{ r.time }}</span>
+                  <span class="block min-w-0 sm:flex-1">
+                    <span class="block font-semibold break-words" :class="{ 'line-through': r.state === 'done' }">
+                      {{ r.schedule.message }}
+                    </span>
+                    <span class="text-sm muted flex items-center gap-1">
+                      <AppIcon :name="KINDS[r.schedule.kind].icon" :size="14" class="shrink-0" /> {{ KINDS[r.schedule.kind].label }}
+                    </span>
                   </span>
                 </span>
                 <span class="rounded-full px-2.5 py-1 text-xs font-bold shrink-0 inline-flex items-center gap-1" :class="STATE_META[r.state].class">

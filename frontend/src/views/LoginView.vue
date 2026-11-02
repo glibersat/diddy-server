@@ -5,6 +5,7 @@ import axios from 'axios'
 import { apiDetail, clearApiKey, connectionProblem, createUser, getMe, serverLabel, setApiKey } from '../api'
 import AppIcon from '../components/AppIcon.vue'
 import SegmentedControl from '../components/SegmentedControl.vue'
+import { announceSignIn } from '../native'
 
 const router = useRouter()
 const mode = ref<'create' | 'existing'>('create')
@@ -22,6 +23,7 @@ async function handleCreate() {
   try {
     const user = await createUser(email.value, timezone.value)
     setApiKey(user.api_key)
+    announceSignIn(user.api_key)
     router.push({ name: 'today' })
   } catch (e) {
     error.value = connectionProblem(e) ?? apiDetail(e) ?? "Couldn't create your account. Try again."
@@ -36,6 +38,7 @@ async function handleExisting() {
   try {
     setApiKey(apiKeyInput.value.trim())
     await getMe()
+    announceSignIn(apiKeyInput.value.trim())
     router.push({ name: 'today' })
   } catch (e) {
     // Never keep an unverified key: the router would let us in and every screen would fail.
