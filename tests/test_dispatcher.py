@@ -590,3 +590,118 @@ def test_notifications_get_a_default_expiry(db_session, user):
 
     assert notification.expires_at is not None
     assert notification.expires_at > datetime.now(UTC) + timedelta(hours=23)
+
+
+def _pending_nudge(user_id: str, dedupe_key: str = "n1") -> Notification:
+    notification = _pending_notification(user_id, dedupe_key)
+    notification.kind = ReminderKind.generic
+    notification.body = "Water the plants"
+    return notification
+
+
+def _connected(monkeypatch, user) -> FakeConnectionManager:
+    fake = FakeConnectionManager(connected_users={user.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_a_nudge_waits_while_a_medication_reminder_is_unacked(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    medication = _pending_notification(user.id)
+    db_session.add(medication)
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+
+    nudge = _pending_nudge(user.id)
+    db_session.add(nudge)
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+
+    db_session.refresh(nudge)
+    assert nudge.status == NotificationStatus.pending
+    assert nudge.send_attempts == 0
+    assert [payload["body"] for _, payload in fake.sent] == ["Take meds"]
+
+
+@pytest.mark.asyncio
+async def test_the_held_nudge_goes_out_once_the_medication_is_acked(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    db_session.add_all([_pending_notification(user.id), _pending_nudge(user.id)])
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+
+    acked = record_ack(db_session, user.id, AckAction.dismissed, 0)
+    await dispatcher.dispatch_pending(db_session)
+
+    assert acked.body == "Take meds"
+    assert [payload["body"] for _, payload in fake.sent] == ["Take meds", "Water the plants"]
+
+
+@pytest.mark.asyncio
+async def test_an_ack_is_credited_to_the_medication_not_a_later_nudge(db_session, user, monkeypatch):
+    _connected(monkeypatch, user)
+    medication = _pending_notification(user.id)
+    db_session.add(medication)
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+    db_session.add(_pending_nudge(user.id))
+    db_session.commit()
+    await dispatcher.dispatch_pending(db_session)
+
+    record_ack(db_session, user.id, AckAction.dismissed, 0)
+
+    db_session.refresh(medication)
+    assert medication.status == NotificationStatus.acked
+
+
+@pytest.mark.asyncio
+async def test_a_newer_medication_goes_before_an_older_nudge(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    nudge = _pending_nudge(user.id)
+    nudge.created_at = datetime.now(UTC) - timedelta(hours=1)
+    db_session.add_all([nudge, _pending_notification(user.id)])
+    db_session.commit()
+
+    await dispatcher.dispatch_pending(db_session)
+
+    assert [payload["body"] for _, payload in fake.sent] == ["Take meds"]
+
+
+@pytest.mark.asyncio
+async def test_an_alert_is_not_held_back_by_medication(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    db_session.add_all([_pending_notification(user.id), _pending_alert(user.id)])
+    db_session.commit()
+
+    await dispatcher.dispatch_pending(db_session)
+
+    assert len(fake.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_given_up_medication_stops_holding_nudges(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    medication = _pending_notification(user.id)
+    medication.status = NotificationStatus.failed
+    db_session.add_all([medication, _pending_nudge(user.id)])
+    db_session.commit()
+
+    await dispatcher.dispatch_pending(db_session)
+
+    assert [payload["body"] for _, payload in fake.sent] == ["Water the plants"]
+
+
+@pytest.mark.asyncio
+async def test_one_users_medication_does_not_hold_another_users_nudge(db_session, user, monkeypatch):
+    other = User(email="other@example.com", timezone="UTC")
+    db_session.add(other)
+    db_session.commit()
+    fake = FakeConnectionManager(connected_users={user.id, other.id})
+    monkeypatch.setattr(dispatcher, "manager", fake)
+    db_session.add_all([_pending_notification(user.id), _pending_nudge(other.id)])
+    db_session.commit()
+
+    await dispatcher.dispatch_pending(db_session)
+
+    assert len(fake.sent) == 2

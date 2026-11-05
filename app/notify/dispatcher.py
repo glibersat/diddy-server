@@ -8,7 +8,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Notification, NotificationChannel, NotificationStatus
+from app.models import Notification, NotificationChannel, NotificationStatus, ReminderKind
 from app.notify.connection_manager import manager
 
 logger = logging.getLogger("diddy.notify.dispatcher")
@@ -118,12 +118,43 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     return sent
 
 
+def _medication_outstanding(db: Session, user_id: str) -> bool:
+    """A medication reminder that's due and not settled yet: waiting to go out, or on the watch
+    waiting for its ack. `requeue_unacked` keeps nagging it until `max_send_attempts`, so this
+    clears by itself when the wearer acts or the row fails or expires."""
+    return (
+        db.query(Notification.id)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.channel == NotificationChannel.reminder,
+            Notification.kind == ReminderKind.medication,
+            Notification.status.in_([NotificationStatus.pending, NotificationStatus.sent]),
+        )
+        .first()
+        is not None
+    )
+
+
+def _displaces_medication(notification: Notification, medication_outstanding: bool) -> bool:
+    """The watch holds one reminder at a time, so a new `trigger` silently replaces an unacked
+    medication reminder, and the wearer's ack would then be credited to the replacement (see
+    app/notify/ack.py). Alerts use a different BLE service and have no ack, so they still go."""
+    return (
+        medication_outstanding
+        and notification.channel == NotificationChannel.reminder
+        and notification.kind != ReminderKind.medication
+    )
+
+
 async def _dispatch_user(db: Session, user_id: str) -> int:
-    """Oldest first, and each row is claimed (`pending` -> `sent`, committed) *before* its send
+    """Medication first, then oldest first, and each row is claimed (`pending` -> `sent`, committed) *before* its send
     awaits: a `delivered`/`ack` the phone answers with can arrive while later rows are still
     going out, and has to find this row already `sent` to be matched to it. The claim is a
     conditional UPDATE, so a row another dispatcher (or a requeue job's thread) moved in the
     meantime is skipped rather than sent twice.
+
+    Other reminders stay `pending` while a medication reminder is outstanding - see
+    `_displaces_medication`.
 
     No connected socket isn't a send attempt: the row just stays `pending` until the phone
     reconnects, instead of burning `max_send_attempts` on ticks that never reached anything.
@@ -134,10 +165,14 @@ async def _dispatch_user(db: Session, user_id: str) -> int:
         .order_by(Notification.created_at, Notification.id)
         .all()
     )
+    medication_outstanding = _medication_outstanding(db, user_id)
+    pending.sort(key=lambda notification: notification.kind != ReminderKind.medication)
     sent = 0
     for notification in pending:
         if not manager.is_connected(user_id):
             break
+        if _displaces_medication(notification, medication_outstanding):
+            continue
         now = datetime.now(UTC)
         claimed = (
             db.query(Notification)
