@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 from fastapi import HTTPException, Response
@@ -93,6 +93,16 @@ async def test_a_later_reminder_waits_until_it_is_due(db_session, user, monkeypa
     db_session.commit()
 
     assert await dispatcher.dispatch_pending(db_session) == 1
+
+
+def test_a_local_time_is_stored_as_the_same_moment_in_utc(db_session, user):
+    paris = timezone(timedelta(hours=1))
+    notification, _ = queue(db_session, user, scheduled_for=datetime(2026, 11, 12, 9, 0, tzinfo=paris))
+
+    db_session.expire_all()
+
+    assert notification.scheduled_for == datetime(2026, 11, 12, 8, 0, tzinfo=UTC)
+    assert notification.expires_at == datetime(2026, 11, 13, 8, 0, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
