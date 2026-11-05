@@ -1,10 +1,13 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import AckAction, NotificationChannel, NotificationStatus, ReminderKind, RuleType
 from app.netguard import BlockedUrlError, check_public_url
+
+
+REMINDER_TEXT_BYTES = 60  # see companion-android/docs/backend-protocol.md
 
 
 def _validate_timezone(value: str) -> str:
@@ -347,6 +350,50 @@ class AlertCreate(BaseModel):
 
 class AlertOut(BaseModel):
     delivered: bool
+
+
+class NotificationCreate(BaseModel):
+    """Queued and retried like the scheduler's notifications. `dedupe_key` is chosen by the caller,
+    so a retry after a lost response can't buzz twice.
+
+    Medication is refused: those reminders must come from a schedule the wearer set up, and they
+    take priority over everything else on the watch."""
+
+    dedupe_key: str = Field(min_length=1, max_length=128)
+    title: str = "Reminder"
+    body: str = Field(min_length=1)
+    channel: NotificationChannel = NotificationChannel.reminder
+    kind: ReminderKind = ReminderKind.generic
+    scheduled_for: AwareDatetime | None = None
+    dismissible: bool = True
+    snooze_minutes: list[int] = Field(default_factory=lambda: [5, 15])
+
+    @field_validator("kind")
+    @classmethod
+    def refuse_medication(cls, kind: ReminderKind) -> ReminderKind:
+        if kind == ReminderKind.medication:
+            raise ValueError("medication reminders can't be queued over the API")
+        return kind
+
+    @field_validator("snooze_minutes")
+    @classmethod
+    def snooze_is_positive(cls, minutes: list[int]) -> list[int]:
+        if any(minute <= 0 for minute in minutes):
+            raise ValueError("snooze_minutes must be positive")
+        return minutes
+
+    @model_validator(mode="after")
+    def fits_the_watch(self) -> "NotificationCreate":
+        """Alert text is limited to 100 bytes, and a reminder's title and body to 60 bytes each.
+        The watch would silently cut anything longer."""
+        limit = 100 if self.channel == NotificationChannel.alert else REMINDER_TEXT_BYTES
+        if len(self.body.encode()) > limit:
+            raise ValueError(f"body is longer than {limit} bytes")
+        if len(self.title.encode()) > REMINDER_TEXT_BYTES:
+            raise ValueError(f"title is longer than {REMINDER_TEXT_BYTES} bytes")
+        if not self.dismissible and not self.snooze_minutes:
+            raise ValueError("dismissible=False requires at least one snooze_minutes entry")
+        return self
 
 
 class NotificationOut(BaseModel):

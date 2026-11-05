@@ -106,7 +106,10 @@ async def dispatch_pending(db: Session, user_id: str | None = None) -> int:
     reconnecting doesn't also churn through every other user's pending queue.
     """
     expire_overdue(db, user_id=user_id)
-    query = db.query(Notification.user_id).filter(Notification.status == NotificationStatus.pending)
+    query = db.query(Notification.user_id).filter(
+        Notification.status == NotificationStatus.pending,
+        Notification.scheduled_for <= datetime.now(UTC),
+    )
     if user_id is not None:
         query = query.filter(Notification.user_id == user_id)
     user_ids = [row.user_id for row in query.distinct()]
@@ -129,6 +132,7 @@ def _medication_outstanding(db: Session, user_id: str) -> bool:
             Notification.channel == NotificationChannel.reminder,
             Notification.kind == ReminderKind.medication,
             Notification.status.in_([NotificationStatus.pending, NotificationStatus.sent]),
+            Notification.scheduled_for <= datetime.now(UTC),
         )
         .first()
         is not None
@@ -161,7 +165,11 @@ async def _dispatch_user(db: Session, user_id: str) -> int:
     """
     pending = (
         db.query(Notification)
-        .filter(Notification.user_id == user_id, Notification.status == NotificationStatus.pending)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.status == NotificationStatus.pending,
+            Notification.scheduled_for <= datetime.now(UTC),
+        )
         .order_by(Notification.created_at, Notification.id)
         .all()
     )
