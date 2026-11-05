@@ -34,11 +34,12 @@ export const KINDS: Record<ReminderKind, KindMeta> = {
 
 export const KIND_ORDER: ReminderKind[] = ['medication', 'appointment', 'generic']
 
-/**
- * What to show as the big line vs. the small line. Daily routines are sent with the generic
- * title "Reminder" and the real text in the body (app/scheduler/daily.py), so lead with the body.
- */
+/** Titles that only say where a reminder came from: "Reminder" from daily routines
+ * (app/scheduler/daily.py) and "Hibou" from The Owl. The real text is in the body. */
+const GENERIC_TITLES = ['Reminder', 'Hibou']
+
+/** What to show as the big line vs. the small line: the title, unless it's a generic one. */
 export function headline(n: { title: string; body: string }): { main: string; sub: string | null } {
-  if (n.title === 'Reminder' && n.body) return { main: n.body, sub: null }
+  if (GENERIC_TITLES.includes(n.title) && n.body) return { main: n.body, sub: null }
   return { main: n.title, sub: n.body && n.body !== n.title ? n.body : null }
 }
