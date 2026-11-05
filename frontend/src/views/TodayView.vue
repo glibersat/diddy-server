@@ -14,7 +14,7 @@ import {
 import AppIcon from '../components/AppIcon.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { KINDS, headline } from '../kinds'
-import { clock, nowIn, relative, shortTime } from '../time'
+import { clock, friendlyDateTime, nowIn, relative, shortTime } from '../time'
 import { maskHasDay } from '../weekdays'
 
 const loading = ref(true)
@@ -112,6 +112,19 @@ const snoozed = computed(() =>
     .sort((a, b) => a.at.getTime() - b.at.getTime()),
 )
 
+/** Reminders queued for later, such as ones set through The Owl. The soonest may already be Next up. */
+const comingUp = computed(() =>
+  notifications.value
+    .filter((n) => n.status === 'pending' && new Date(n.scheduled_for) > now.value)
+    .filter(
+      (n) =>
+        !nextUp.value ||
+        n.body !== nextUp.value.body ||
+        new Date(n.scheduled_for).getTime() !== new Date(nextUp.value.scheduled_for).getTime(),
+    )
+    .sort((a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime()),
+)
+
 const STATE_META: Record<RowState, { label: string; class: string }> = {
   done: { label: 'Done', class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' },
   snoozed: { label: 'Snoozed', class: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200' },
@@ -192,7 +205,23 @@ async function quick(which: 'ring' | 'test', action: () => Promise<boolean>) {
         </ul>
       </section>
 
-      <!-- 3. Today's routines as a checklist with progress -->
+      <!-- 3. Coming up: one-off reminders waiting for their time -->
+      <section v-if="comingUp.length" aria-labelledby="coming-up-heading">
+        <h2 id="coming-up-heading" class="text-lg font-bold mb-3 flex items-center gap-2">
+          <AppIcon name="bell" /> Coming up
+        </h2>
+        <ul class="space-y-2">
+          <li v-for="n in comingUp" :key="n.id" class="card !py-3 flex items-center justify-between gap-3">
+            <span class="min-w-0">
+              <span class="block font-semibold break-words">{{ headline(n).main }}</span>
+              <span v-if="headline(n).sub" class="block text-sm muted break-words">{{ headline(n).sub }}</span>
+            </span>
+            <span class="text-sm muted shrink-0 tabular-nums">{{ friendlyDateTime(n.scheduled_for) }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 4. Today's routines as a checklist with progress -->
       <section aria-labelledby="routines-heading">
         <div class="flex items-end justify-between gap-3 mb-3">
           <h2 id="routines-heading" class="text-lg font-bold">Today's routines</h2>
@@ -250,7 +279,7 @@ async function quick(which: 'ring' | 'test', action: () => Promise<boolean>) {
         </template>
       </section>
 
-      <!-- 4. Quick actions -->
+      <!-- 5. Quick actions -->
       <section aria-labelledby="quick-heading">
         <h2 id="quick-heading" class="text-lg font-bold mb-3">Quick actions</h2>
         <div class="grid grid-cols-2 gap-3">

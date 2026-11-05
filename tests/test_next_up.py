@@ -1,14 +1,70 @@
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
-from app.models import DailySchedule, IcsSource, RuleType
+from app.models import DailySchedule, IcsSource, NotificationStatus, RuleType, User
 from app.notify import next_up
+from app.notify.queue import enqueue_notification
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.ics"
 
 
 def test_next_reminder_none_with_no_rules(db_session, user):
     assert next_up.next_reminder(db_session, user.id) is None
+
+
+def queue(db_session, user_id, key, scheduled_for):
+    return enqueue_notification(
+        db_session,
+        user_id,
+        rule_type=RuleType.manual,
+        rule_id=key,
+        dedupe_key=key,
+        title="Hibou",
+        body="Appeler le dentiste",
+        scheduled_for=scheduled_for,
+    )
+
+
+def test_next_reminder_includes_a_queued_reminder(db_session, user):
+    db_session.add(DailySchedule(user_id=user.id, time_of_day="20:00", message="Evening walk"))
+    db_session.commit()
+    now = datetime(2024, 1, 3, 7, 0, tzinfo=UTC)
+    due = now + timedelta(hours=1)
+    queue(db_session, user.id, "soon", due)
+
+    result = next_up.next_reminder(db_session, user.id, now=now)
+
+    assert (result.rule_type, result.title, result.body) == (RuleType.manual, "Hibou", "Appeler le dentiste")
+    assert result.scheduled_for == due
+
+
+def test_next_reminder_keeps_an_earlier_rule_ahead_of_a_queued_reminder(db_session, user):
+    db_session.add(DailySchedule(user_id=user.id, time_of_day="09:00", message="Take meds"))
+    db_session.commit()
+    now = datetime(2024, 1, 3, 7, 0, tzinfo=UTC)
+    queue(db_session, user.id, "later", now + timedelta(hours=5))
+
+    assert next_up.next_reminder(db_session, user.id, now=now).body == "Take meds"
+
+
+def test_next_reminder_skips_queued_reminders_already_due_or_gone_out(db_session, user):
+    now = datetime(2024, 1, 3, 7, 0, tzinfo=UTC)
+    queue(db_session, user.id, "overdue", now - timedelta(minutes=1))
+    sent = queue(db_session, user.id, "sent", now + timedelta(hours=1))
+    sent.status = NotificationStatus.sent
+    db_session.commit()
+
+    assert next_up.next_reminder(db_session, user.id, now=now) is None
+
+
+def test_next_reminder_leaves_out_another_users_queued_reminder(db_session, user):
+    other = User(email="other@example.com", timezone="Europe/Paris")
+    db_session.add(other)
+    db_session.commit()
+    now = datetime(2024, 1, 3, 7, 0, tzinfo=UTC)
+    queue(db_session, other.id, "theirs", now + timedelta(hours=1))
+
+    assert next_up.next_reminder(db_session, user.id, now=now) is None
 
 
 def test_next_reminder_picks_soonest_daily_schedule(db_session, user):

@@ -185,8 +185,8 @@ export async function listNotifications(limit?: number): Promise<Notification[]>
   return data
 }
 
-/** Predicted, not a real Notification row yet - see app/notify/next_up.py. Null if no enabled
- * schedule or ICS source has an upcoming occurrence in the lookahead window. */
+/** See app/notify/next_up.py. Null if no queued notification is ahead and no enabled schedule or
+ * ICS source has an upcoming occurrence in the lookahead window. */
 export async function getNextNotification(): Promise<NextReminder | null> {
   const { data } = await client.get<NextReminder | null>('/notifications/next')
   return data
