@@ -1,8 +1,8 @@
 """Predicts the next reminder that will fire, for the frontend's "what's coming up" panel.
 
-This is distinct from `Notification` rows, which only get created once a reminder actually
-becomes due (see app/scheduler/daily.py and app/scheduler/ics.py) - there's nothing in the
-database yet to query for "what's next", so this walks the enabled rules directly instead.
+Rules only create their `Notification` row once a reminder actually becomes due (see
+app/scheduler/daily.py and app/scheduler/ics.py), so this walks the enabled rules directly. Only
+reminders queued over the API exist ahead of time, so those are read from their rows.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.models import DailySchedule, IcsSource, ReminderKind, RuleType, User
+from app.models import DailySchedule, IcsSource, Notification, NotificationStatus, ReminderKind, RuleType, User
 from app.scheduler import ics
 
 LOOKAHEAD_DAYS = 7
@@ -87,12 +87,34 @@ def _next_ics_reminders(db: Session, user_id: str, now: datetime) -> list[NextRe
     return reminders
 
 
+def _next_queued_reminders(db: Session, user_id: str, now: datetime) -> list[NextReminder]:
+    queued = db.query(Notification).filter(
+        Notification.user_id == user_id,
+        Notification.status == NotificationStatus.pending,
+        Notification.scheduled_for > now,
+    )
+    return [
+        NextReminder(
+            rule_type=notification.rule_type,
+            title=notification.title,
+            body=notification.body,
+            kind=notification.kind,
+            scheduled_for=notification.scheduled_for,
+        )
+        for notification in queued
+    ]
+
+
 def next_reminder(db: Session, user_id: str, now: datetime | None = None) -> NextReminder | None:
-    """The single soonest reminder still ahead of `now`, across every enabled rule for this user -
-    what the frontend shows as "next up" after the currently snoozed/active notifications.
+    """The single soonest reminder still ahead of `now`, across every enabled rule and queued
+    notification for this user - what the frontend shows as "next up" after the currently snoozed/active notifications.
     """
     now = now or datetime.now(UTC)
-    candidates = _next_daily_reminders(db, user_id, now) + _next_ics_reminders(db, user_id, now)
+    candidates = (
+        _next_daily_reminders(db, user_id, now)
+        + _next_ics_reminders(db, user_id, now)
+        + _next_queued_reminders(db, user_id, now)
+    )
     if not candidates:
         return None
     return min(candidates, key=lambda r: r.scheduled_for)
