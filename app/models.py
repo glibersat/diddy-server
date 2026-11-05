@@ -227,6 +227,8 @@ class Notification(Base):
     ack_action: Mapped[AckAction | None] = mapped_column(String, nullable=True)
     ack_snoozed_minutes: Mapped[int | None] = mapped_column(nullable=True)
     acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Every Snooze press on this reminder; `ack_action` only says what the last press was.
+    snooze_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 

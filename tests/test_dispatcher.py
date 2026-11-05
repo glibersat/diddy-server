@@ -491,6 +491,80 @@ def test_record_ack_updates_most_recently_sent_notification(db_session, user):
     assert acked.acked_at is not None
 
 
+def _sent(user_id, key="sent", minutes_ago=0):
+    notification = _pending_notification(user_id, dedupe_key=key)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    return notification
+
+
+def test_every_snooze_on_a_reminder_is_counted(db_session, user):
+    reminder = _sent(user.id)
+    db_session.add(reminder)
+    db_session.commit()
+
+    for minutes in (5, 15, 15):
+        assert record_ack(db_session, user.id, AckAction.snoozed, minutes).id == reminder.id
+
+    assert reminder.snooze_count == 3
+    assert reminder.ack_snoozed_minutes == 15
+
+
+def test_done_after_a_snooze_is_kept(db_session, user):
+    reminder = _sent(user.id)
+    db_session.add(reminder)
+    db_session.commit()
+    record_ack(db_session, user.id, AckAction.snoozed, 5)
+
+    assert record_ack(db_session, user.id, AckAction.dismissed, 0).id == reminder.id
+
+    assert reminder.ack_action == AckAction.dismissed
+    assert reminder.snooze_count == 1
+
+
+def test_a_finished_reminder_takes_no_more_presses(db_session, user):
+    reminder = _sent(user.id)
+    db_session.add(reminder)
+    db_session.commit()
+    record_ack(db_session, user.id, AckAction.dismissed, 0)
+
+    assert record_ack(db_session, user.id, AckAction.snoozed, 5) is None
+
+    assert reminder.ack_action == AckAction.dismissed
+    assert reminder.snooze_count == 0
+
+
+def test_a_press_goes_to_a_newer_reminder_rather_than_an_older_snoozed_one(db_session, user):
+    older = _sent(user.id, "older", minutes_ago=10)
+    db_session.add(older)
+    db_session.commit()
+    record_ack(db_session, user.id, AckAction.snoozed, 5)
+    newer = _sent(user.id, "newer")
+    db_session.add(newer)
+    db_session.commit()
+
+    assert record_ack(db_session, user.id, AckAction.dismissed, 0).id == newer.id
+
+    assert older.ack_action == AckAction.snoozed
+
+
+def test_a_snoozed_reminder_that_comes_back_after_a_newer_one_can_still_be_finished(
+    db_session, user
+):
+    older = _sent(user.id, "older", minutes_ago=10)
+    newer = _sent(user.id, "newer", minutes_ago=5)
+    db_session.add(older)
+    db_session.commit()
+    record_ack(db_session, user.id, AckAction.snoozed, 5)
+    db_session.add(newer)
+    db_session.commit()
+    record_ack(db_session, user.id, AckAction.dismissed, 0)
+
+    assert record_ack(db_session, user.id, AckAction.dismissed, 0).id == older.id
+
+    assert older.ack_action == AckAction.dismissed
+
+
 def test_record_ack_with_no_sent_notification_returns_none(db_session, user):
     assert record_ack(db_session, user.id, AckAction.dismissed, 0) is None
 
