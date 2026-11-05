@@ -22,10 +22,18 @@ class UTCDateTime(TypeDecorator):
     serializes with no UTC offset (e.g. "2026-08-12T13:11:13" instead of "...13:11:13+00:00"),
     and JS's `Date` parser treats an offset-less ISO string as *local* time - the frontend then
     displays the raw UTC clock digits mislabeled as the browser's local time.
+
+    Writes convert to UTC for the same reason: SQLite would store an aware datetime's clock digits
+    as they are, so 09:00+01:00 from an API caller would come back as 09:00 UTC, an hour late.
     """
 
     impl = DateTime(timezone=True)
     cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect) -> datetime | None:  # noqa: ARG002
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(UTC)
+        return value
 
     def process_result_value(self, value: datetime | None, dialect) -> datetime | None:  # noqa: ARG002
         if value is not None and value.tzinfo is None:
