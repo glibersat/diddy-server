@@ -417,3 +417,4 @@ class NotificationOut(BaseModel):
     ack_action: AckAction | None
     ack_snoozed_minutes: int | None
     acked_at: datetime | None
+    snooze_count: int
