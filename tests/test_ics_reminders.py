@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
@@ -182,3 +183,43 @@ def test_run_all_ics_ticks_skips_a_broken_source_without_blocking_the_rest(db_se
 
     assert created >= 1
     assert db_session.query(Notification).filter(Notification.rule_id == working.id).count() >= 1
+
+
+SECRET_FEED = "https://example.com/cal.ics?PassphraseKey=not-for-the-logs"
+
+
+def leaky_fetch(url_or_path):
+    raise OSError(f"Client error '404' for url '{url_or_path}'")  # what httpx's messages look like
+
+
+def test_a_failed_refetch_keeps_the_feed_url_out_of_the_logs(db_session, user, monkeypatch, caplog):
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", leaky_fetch)
+    source = IcsSource(
+        user_id=user.id, url_or_path=SECRET_FEED, offsets_minutes=[30], cached_ics_text=FIXTURE.read_text()
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    with caplog.at_level(logging.INFO):
+        run_ics_source_tick(db_session, source, now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
+
+    assert "OSError" in caplog.text
+    assert "not-for-the-logs" not in caplog.text
+
+
+def test_a_skipped_source_keeps_the_feed_url_out_of_the_logs(db_session, user, monkeypatch, caplog):
+    monkeypatch.setattr("app.scheduler.ics.fetch_ics_text", leaky_fetch)
+    db_session.add(IcsSource(user_id=user.id, url_or_path=SECRET_FEED, offsets_minutes=[30]))
+    db_session.commit()
+
+    with caplog.at_level(logging.INFO):
+        run_all_ics_ticks(db_session, now=datetime(2024, 1, 3, 9, 30, tzinfo=UTC))
+
+    assert "OSError" in caplog.text
+    assert "not-for-the-logs" not in caplog.text
+
+
+def test_httpx_does_not_log_the_urls_it_fetches():
+    import app.main  # noqa: F401  sets the log levels
+
+    assert logging.getLogger("httpx").level == logging.WARNING

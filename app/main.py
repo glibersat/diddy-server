@@ -23,6 +23,8 @@ from app.notify.dispatcher import run_dispatch_loop
 from app.scheduler.jobs import build_scheduler
 
 logging.basicConfig(level=logging.INFO)
+# At INFO httpx logs every URL it fetches, and a calendar feed's URL is its password.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

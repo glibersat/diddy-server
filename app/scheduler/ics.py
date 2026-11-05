@@ -98,12 +98,15 @@ def run_ics_source_tick(db: Session, source: IcsSource, now: datetime | None = N
         try:
             source.cached_ics_text = fetch_ics_text(source.url_or_path)
             source.last_synced_at = now
-        except Exception:
+        except Exception as error:
             # Keep reminding from the last good copy rather than going silent while the feed is
             # down; `last_synced_at` stays put so the next tick retries the fetch.
             if source.cached_ics_text is None:
                 raise
-            logger.warning("Refetching ICS source %s failed, using cached copy", source.id, exc_info=True)
+            # The type only, here and below: httpx's messages carry the feed URL, which is a secret.
+            logger.warning(
+                "Refetching ICS source %s failed (%s), using cached copy", source.id, type(error).__name__
+            )
 
     lookahead = timedelta(minutes=max(source.offsets_minutes, default=0) + LOOKAHEAD_BUFFER_MINUTES)
     occurrences = expand_occurrences(source.cached_ics_text, now - timedelta(minutes=5), now + lookahead)
@@ -143,7 +146,7 @@ def run_all_ics_ticks(db: Session, now: datetime | None = None) -> int:
         # One unreachable/broken feed mustn't abort the tick for every source queried after it.
         try:
             total += run_ics_source_tick(db, source, now)
-        except Exception:
+        except Exception as error:
             db.rollback()
-            logger.exception("Skipping ICS source %s this tick", source.id)
+            logger.error("Skipping ICS source %s this tick (%s)", source.id, type(error).__name__)
     return total
