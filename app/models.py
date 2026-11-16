@@ -81,6 +81,15 @@ class User(Base):
     digest_enabled: Mapped[bool] = mapped_column(default=False)
     digest_time: Mapped[str | None] = mapped_column(String, nullable=True)  # "HH:MM", 24h, local tz
 
+    # When the companion app was last heard from: its WebSocket opening, any message on it, or it
+    # closing. Whether it is connected right now lives only in memory (ConnectionManager), so this
+    # is what tells a client like Hibou how long the phone - and so every reminder - has been away.
+    phone_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # When the watch itself last answered through the phone: a delivery confirmation, a press, its
+    # Bluetooth link coming back, or a heart rate. Anything sent after this and never confirmed
+    # means the phone is up but can't reach the watch.
+    watch_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     daily_schedules: Mapped[list["DailySchedule"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     ics_sources: Mapped[list["IcsSource"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     todo_lists: Mapped[list["TodoList"]] = relationship(back_populates="user", cascade="all, delete-orphan")

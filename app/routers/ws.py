@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import UTC, datetime
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -32,6 +33,26 @@ def _in_session(fn: Callable[..., Any], *args: Any) -> Any:
 
 def _user_for_key(db: Session, api_key: str) -> User | None:
     return db.query(User).filter(User.api_key == api_key).first()
+
+
+# Messages that only come once the watch itself answered: see User.watch_seen_at.
+_FROM_THE_WATCH = frozenset({"ack", "delivered", "watch_ready", "heart_rate"})
+
+
+def _seen(db: Session, user_id: str, watch: bool) -> None:
+    """Note that the phone, and maybe the watch, was just heard from."""
+    now = datetime.now(UTC)
+    values = {User.phone_seen_at: now, **({User.watch_seen_at: now} if watch else {})}
+    db.query(User).filter(User.id == user_id).update(values)
+    db.commit()
+
+
+async def _mark_seen(user_id: str, watch: bool = False) -> None:
+    # Only a client's view of how long the phone has been away: never worth the connection.
+    try:
+        await run_in_threadpool(_in_session, _seen, user_id, watch)
+    except Exception:
+        logger.exception("Could not record that user %s's phone was seen", user_id)
 
 
 def _record_location_and_check_geofences(db: Session, user_id: str, message: LocationMessage) -> None:
@@ -89,6 +110,8 @@ async def _handle_message(user_id: str, text: str) -> None:
     except ValidationError:
         logger.info("Ignoring malformed message from user %s: %r", user_id, raw)
         return
+    if msg_type in _FROM_THE_WATCH:
+        await _mark_seen(user_id, watch=True)
     await on_message(user_id, message)
 
 
@@ -107,6 +130,7 @@ async def companion_ws(
         return
 
     await manager.connect(user.id, websocket)
+    await _mark_seen(user.id)
     try:
         while True:
             frame = await websocket.receive()
@@ -116,6 +140,7 @@ async def companion_ws(
             if text is None:
                 logger.info("Ignoring binary frame from user %s", user.id)
                 continue
+            await _mark_seen(user.id)
             # One bad message (or a transient DB error handling it) mustn't cost the phone its
             # connection - it'd have to reconnect, and anything sent meanwhile gets delayed.
             try:
@@ -126,3 +151,4 @@ async def companion_ws(
         pass
     finally:
         manager.disconnect(user.id, websocket)
+        await _mark_seen(user.id)
