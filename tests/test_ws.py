@@ -176,3 +176,50 @@ async def test_dispatch_loop_sends_as_soon_as_something_is_enqueued(db_session, 
         loop_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await loop_task
+
+
+def _phone(client, user):
+    return client.get("/users/me", headers={"X-API-Key": user.api_key}).json()
+
+
+def test_users_me_says_whether_the_phone_is_connected_and_when_it_was_last_seen(
+    ws_user, session_factory
+):
+    """Hibou warns the wearer when the phone has been away too long: it needs both, and the
+    "last seen" has to survive the connection closing."""
+    from app.db import get_db
+    from app.routers import users
+
+    def db():
+        with session_factory() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(ws.router)
+    app.include_router(users.router)
+    app.dependency_overrides[get_db] = db
+    client = TestClient(app)
+
+    before = _phone(client, ws_user)
+    assert before["phone_connected"] is False and before["phone_seen_at"] is None
+
+    with client.websocket_connect("/ws", headers={"X-API-Key": ws_user.api_key}):
+        pass
+    deadline = time.monotonic() + 2
+    while _phone(client, ws_user)["phone_seen_at"] is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _phone(client, ws_user)["watch_seen_at"] is None  # the phone alone isn't the watch
+
+    with client.websocket_connect("/ws", headers={"X-API-Key": ws_user.api_key}) as conn:
+        conn.send_json({"type": "ack", "action": "dismissed", "snoozedMinutes": 0})
+        _wait_for_ack(session_factory, AckAction.dismissed)
+        during = _phone(client, ws_user)
+        assert during["phone_connected"] is True and during["phone_seen_at"] is not None
+        assert during["watch_seen_at"] is not None  # an ack comes from a press on the watch
+
+    deadline = time.monotonic() + 2
+    while _phone(client, ws_user)["phone_connected"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    after = _phone(client, ws_user)
+    assert after["phone_connected"] is False
+    assert after["phone_seen_at"] >= during["phone_seen_at"]

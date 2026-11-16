@@ -63,6 +63,9 @@ class UserOut(BaseModel):
     timezone: str
     digest_enabled: bool
     digest_time: str | None
+    phone_seen_at: datetime | None = None
+    watch_seen_at: datetime | None = None
+    phone_connected: bool = False  # filled in from ConnectionManager, not stored
 
 
 class UserUpdate(BaseModel):
