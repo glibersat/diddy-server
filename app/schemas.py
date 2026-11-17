@@ -292,10 +292,13 @@ class WatchReadyMessage(BaseModel):
 class HeartRateMessage(BaseModel):
     """Inbound WS message, one per reading the watch produces - see
     companion-android/docs/backend-protocol.md. `timestamp` is milliseconds since epoch, stamped
-    by the phone on receipt."""
+    by the phone on receipt.
+
+    `bpm` must be positive: InfiniTime notifies 0 while it has no reading yet (sensor warming up,
+    ambient light, gave up), and that is not a measurement."""
 
     type: str
-    bpm: int
+    bpm: int = Field(gt=0, lt=256)
     timestamp: int
 
 
