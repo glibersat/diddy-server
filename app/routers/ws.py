@@ -76,15 +76,19 @@ async def _on_watch_ready(user_id: str, message: WatchReadyMessage) -> None:  # 
         await resend_now(db, user_id)
 
 
-async def _on_heart_rate(user_id: str, message: HeartRateMessage) -> None:
+async def _on_heart_rate(user_id: str, message: HeartRateMessage) -> dict:
     await run_in_threadpool(_in_session, record_heart_rate, user_id, message.bpm, message.timestamp)
+    # Only sent once the row is committed: the phone drops the reading from its pending queue
+    # on this, and resends anything still unacked on its next connection.
+    return {"type": "heart_rate_ack", "timestamp": message.timestamp}
 
 
 async def _on_location(user_id: str, message: LocationMessage) -> None:
     await run_in_threadpool(_in_session, _record_location_and_check_geofences, user_id, message)
 
 
-_HANDLERS: dict[str, tuple[type[BaseModel], Callable[[str, Any], Awaitable[None]]]] = {
+# A handler may return a payload to send back on the same socket (e.g. `heart_rate_ack`).
+_HANDLERS: dict[str, tuple[type[BaseModel], Callable[[str, Any], Awaitable[dict | None]]]] = {
     "ack": (AckMessage, _on_ack),
     "delivered": (DeliveredMessage, _on_delivered),
     "watch_ready": (WatchReadyMessage, _on_watch_ready),
@@ -93,26 +97,26 @@ _HANDLERS: dict[str, tuple[type[BaseModel], Callable[[str, Any], Awaitable[None]
 }
 
 
-async def _handle_message(user_id: str, text: str) -> None:
+async def _handle_message(user_id: str, text: str) -> dict | None:
     try:
         raw = json.loads(text)
     except json.JSONDecodeError:
         logger.info("Ignoring non-JSON message from user %s: %r", user_id, text[:200])
-        return
+        return None
     msg_type = raw.get("type") if isinstance(raw, dict) else None
     handler = _HANDLERS.get(msg_type) if isinstance(msg_type, str) else None
     if handler is None:
         logger.info("Ignoring unrecognized message from user %s: %r", user_id, raw)
-        return
+        return None
     schema, on_message = handler
     try:
         message = schema.model_validate(raw)
     except ValidationError:
         logger.info("Ignoring malformed message from user %s: %r", user_id, raw)
-        return
+        return None
     if msg_type in _FROM_THE_WATCH:
         await _mark_seen(user_id, watch=True)
-    await on_message(user_id, message)
+    return await on_message(user_id, message)
 
 
 @router.websocket("/ws")
@@ -144,9 +148,18 @@ async def companion_ws(
             # One bad message (or a transient DB error handling it) mustn't cost the phone its
             # connection - it'd have to reconnect, and anything sent meanwhile gets delayed.
             try:
-                await _handle_message(user.id, text)
+                reply = await _handle_message(user.id, text)
             except Exception:
                 logger.exception("Failed to handle message from user %s: %r", user.id, text[:200])
+                continue
+            if reply is not None:
+                try:
+                    await websocket.send_json(reply)
+                except Exception:
+                    # Socket went away mid-reply: the phone resends whatever it didn't get
+                    # acked on its next connection, and the handler already deduped.
+                    logger.info("Could not reply to user %s, socket closed", user.id)
+                    break
     except WebSocketDisconnect:
         pass
     finally:

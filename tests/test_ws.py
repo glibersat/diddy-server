@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.websockets import WebSocketDisconnect
 
 from app.db import Base
-from app.models import AckAction, Notification, NotificationStatus, RuleType, User
+from app.models import AckAction, HeartRateReading, Notification, NotificationStatus, RuleType, User
 from app.notify import dispatcher
 from app.notify.connection_manager import ConnectionManager
 from app.notify.queue import enqueue_notification
@@ -108,6 +108,27 @@ def test_ws_survives_garbage_and_handler_errors(client, ws_user, session_factory
         conn.send_json({"type": "heart_rate", "bpm": 72, "timestamp": 1735689600000})
         conn.send_json({"type": "ack", "action": "snoozed", "snoozedMinutes": 5})
         _wait_for_ack(session_factory, AckAction.snoozed)
+
+
+def test_ws_acks_heart_rate_once_stored(client, ws_user, session_factory):
+    with client.websocket_connect("/ws", headers={"X-API-Key": ws_user.api_key}) as conn:
+        conn.send_json({"type": "heart_rate", "bpm": 72, "timestamp": 1735689600000})
+        assert conn.receive_json() == {"type": "heart_rate_ack", "timestamp": 1735689600000}
+        # A resend (ack lost) is acked again but not stored twice.
+        conn.send_json({"type": "heart_rate", "bpm": 72, "timestamp": 1735689600000})
+        assert conn.receive_json() == {"type": "heart_rate_ack", "timestamp": 1735689600000}
+    with session_factory() as db:
+        assert db.query(HeartRateReading).count() == 1
+
+
+def test_ws_ignores_zero_bpm(client, ws_user, session_factory):
+    """InfiniTime notifies 0 while it has no reading: not stored, not acked."""
+    with client.websocket_connect("/ws", headers={"X-API-Key": ws_user.api_key}) as conn:
+        conn.send_json({"type": "heart_rate", "bpm": 0, "timestamp": 1735689600000})
+        conn.send_json({"type": "heart_rate", "bpm": 64, "timestamp": 1735689700000})
+        assert conn.receive_json() == {"type": "heart_rate_ack", "timestamp": 1735689700000}
+    with session_factory() as db:
+        assert [r.bpm for r in db.query(HeartRateReading).all()] == [64]
 
 
 class _StalledSocket:

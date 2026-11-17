@@ -83,7 +83,7 @@ uv run pytest
   last-synced items
 - `GET /notifications` — outbox/audit log, including ack status
 - `GET /heart-rate?since=...&until=...` — bpm readings from the watch, optionally windowed
-- `WS /ws` — companion app connection (`X-API-Key` header, or legacy `?api_key=...`): receives `trigger`, sends `ack`/`delivered`/`heart_rate`
+- `WS /ws` — companion app connection (`X-API-Key` header, or legacy `?api_key=...`): receives `trigger`, sends `ack`/`delivered`/`heart_rate` (answered with `heart_rate_ack`)
 
 ## Frontend
 
