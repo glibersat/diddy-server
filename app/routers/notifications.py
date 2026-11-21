@@ -50,6 +50,7 @@ def create_notification(
         kind=payload.kind,
         dismissible=payload.dismissible,
         snooze_minutes=payload.snooze_minutes,
+        labels=payload.labels.model_dump() if payload.labels else None,
         scheduled_for=payload.scheduled_for,
     )
     if notification is not None:

@@ -358,6 +358,28 @@ class AlertOut(BaseModel):
     delivered: bool
 
 
+LABEL_BYTES = 16  # ReminderController::labelSize on the watch
+
+
+class ReminderLabels(BaseModel):
+    """Button labels for the watch. `done` replaces DONE, `later` the first snooze button's
+    "N min", and a `decline` adds a "not today" button, acked as `declined`. ASCII only: the
+    watch's button font has no accented letters."""
+
+    done: str = ""
+    later: str = ""
+    decline: str = ""
+
+    @field_validator("done", "later", "decline")
+    @classmethod
+    def fits_a_button(cls, label: str) -> str:
+        if not label.isascii():
+            raise ValueError("labels must be ASCII: the watch can't draw accents")
+        if len(label) > LABEL_BYTES:
+            raise ValueError(f"labels are at most {LABEL_BYTES} characters")
+        return label
+
+
 class NotificationCreate(BaseModel):
     """Queued and retried like the scheduler's notifications. `dedupe_key` is chosen by the caller,
     so a retry after a lost response can't buzz twice.
@@ -373,6 +395,7 @@ class NotificationCreate(BaseModel):
     scheduled_for: AwareDatetime | None = None
     dismissible: bool = True
     snooze_minutes: list[int] = Field(default_factory=lambda: [5, 15])
+    labels: ReminderLabels | None = None
 
     @field_validator("kind")
     @classmethod
@@ -399,6 +422,8 @@ class NotificationCreate(BaseModel):
             raise ValueError(f"title is longer than {REMINDER_TEXT_BYTES} bytes")
         if not self.dismissible and not self.snooze_minutes:
             raise ValueError("dismissible=False requires at least one snooze_minutes entry")
+        if self.labels is not None and self.channel == NotificationChannel.alert:
+            raise ValueError("labels only apply to reminders")
         return self
 
 
@@ -415,6 +440,7 @@ class NotificationOut(BaseModel):
     kind: ReminderKind
     dismissible: bool
     snooze_minutes: list[int]
+    labels: dict[str, str] | None = None
     status: NotificationStatus
     sent_at: datetime | None
     delivered_at: datetime | None

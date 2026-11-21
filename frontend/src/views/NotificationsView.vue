@@ -74,17 +74,28 @@ interface Status {
 }
 
 function status(n: Notification): Status {
+  // With its own labels, the badge says the button that was pressed ("OK", "Plus tard"...).
   if (n.ack_action === 'dismissed')
-    return { label: 'Done', class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' }
+    return { label: n.labels?.done || 'Done', class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' }
+  if (n.ack_action === 'declined')
+    return { label: n.labels?.decline || 'Not today', class: 'bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-200' }
   if (n.ack_action === 'snoozed')
     return {
-      label: `Snoozed ${n.ack_snoozed_minutes} min`,
+      label: n.labels?.later ? `${n.labels.later} (${n.ack_snoozed_minutes} min)` : `Snoozed ${n.ack_snoozed_minutes} min`,
       class: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
     }
   if (n.status === 'failed') return { label: "Couldn't send", class: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200' }
   if (n.status === 'pending') return { label: 'Waiting', class: 'bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300' }
   if (n.delivered_at) return { label: 'On watch', class: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' }
   return { label: 'Sent', class: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' }
+}
+
+/** The buttons it had on the watch, when they weren't the built-in ones. */
+function buttons(n: Notification): string | null {
+  const l = n.labels
+  if (!l) return null
+  const names = [l.done || 'Done', l.later || (n.snooze_minutes.length ? `${n.snooze_minutes[0]} min` : null), l.decline]
+  return names.filter(Boolean).join(' / ')
 }
 
 /** How late the watch confirmed delivery vs. the planned time (dispatch latency + reconnects). */
@@ -149,6 +160,7 @@ function retrigger(n: Notification): string | null {
                 <span class="tabular-nums">{{ clock(new Date(n.scheduled_for)) }}</span>
                 <template v-if="delay(n)"> · {{ delay(n) }}</template>
                 <template v-if="retrigger(n)"> · {{ retrigger(n) }}</template>
+                <template v-if="buttons(n)"> · buttons: {{ buttons(n) }}</template>
               </p>
             </div>
           </li>

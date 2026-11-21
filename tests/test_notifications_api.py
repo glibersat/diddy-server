@@ -163,3 +163,58 @@ def test_another_users_reminder_cannot_be_cancelled(db_session, user):
 
     assert error.value.status_code == 404
     assert db_session.query(Notification).count() == 1
+
+
+READY = {"done": "Maintenant", "later": "Plus tard", "decline": "Pas aujourd'hui"}
+
+
+@pytest.mark.asyncio
+async def test_labels_go_to_the_watch_with_the_reminder(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    queue(db_session, user, labels=READY, snooze_minutes=[15])
+
+    await dispatcher.dispatch_pending(db_session)
+
+    [(_, sent)] = fake.sent
+    assert sent["labels"] == READY
+    assert sent["snoozeMinutes"] == [15]
+
+
+@pytest.mark.asyncio
+async def test_a_reminder_without_labels_is_sent_as_before(db_session, user, monkeypatch):
+    fake = _connected(monkeypatch, user)
+    queue(db_session, user)
+
+    await dispatcher.dispatch_pending(db_session)
+
+    [(_, sent)] = fake.sent
+    assert "labels" not in sent
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"labels": {"done": "Déjà fait"}},
+        {"labels": {"decline": "x" * 17}},
+        {"labels": {"done": "OK"}, "channel": NotificationChannel.alert},
+    ],
+)
+def test_labels_the_watch_cannot_draw_are_refused(fields):
+    with pytest.raises(ValidationError):
+        payload(**fields)
+
+
+def test_a_declined_reminder_is_recorded_as_declined(db_session, user):
+    from app.models import AckAction
+    from app.notify.ack import record_ack
+
+    notification, _ = queue(db_session, user, labels=READY)
+    notification.status = NotificationStatus.sent
+    notification.sent_at = datetime.now(UTC)
+    db_session.commit()
+
+    acked = record_ack(db_session, user.id, AckAction.declined, 0)
+
+    assert acked.id == notification.id
+    assert acked.ack_action == AckAction.declined
+    assert acked.snooze_count == 0

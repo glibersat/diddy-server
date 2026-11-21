@@ -144,7 +144,14 @@ export interface TodoItem {
 }
 
 export type NotificationStatus = 'pending' | 'sent' | 'acked' | 'failed'
-export type AckAction = 'snoozed' | 'dismissed'
+export type AckAction = 'snoozed' | 'dismissed' | 'declined'
+/** Button labels shown on the watch in place of the built-in ones (see ReminderLabels in
+ * app/schemas.py): `decline` adds a "not today" button, acked as `declined`. */
+export interface ReminderLabels {
+  done?: string | null
+  later?: string | null
+  decline?: string | null
+}
 /** Which BLE service delivers this notification: `reminder` (dismissible/snoozable, needs an
  * on-watch ack) or `alert` (one-shot, no dismiss/snooze, no ack step). */
 export type NotificationChannel = 'reminder' | 'alert'
@@ -162,6 +169,7 @@ export interface Notification {
   kind: ReminderKind
   dismissible: boolean
   snooze_minutes: number[]
+  labels: ReminderLabels | null
   status: NotificationStatus
   sent_at: string | null
   delivered_at: string | null

@@ -28,10 +28,12 @@ protocol was found. Delivery is **not** push notifications — it's a persistent
   older `?api_key=<key>` query param still works) and stays connected (auto-reconnect with
   backoff is the phone's job, not this server's).
 - Backend → phone: `{"type": "trigger", "kind": ..., "dismissible": ..., "snoozeMinutes": [...],
-  "title": ..., "body": ...}`. Fire-and-forget — sending it doesn't mean the watch showed it, and
+  "title": ..., "body": ...}`, plus `"labels": {"done", "later", "decline"}` when the
+  notification has its own button labels (a `decline` adds a "not today" button, acked as
+  `declined`). Fire-and-forget — sending it doesn't mean the watch showed it, and
   if the phone isn't BLE-connected to the watch the trigger is silently dropped with no error
   back to us.
-- Phone → backend: `{"type": "ack", "action": "snoozed"|"dismissed", "snoozedMinutes": int}`,
+- Phone → backend: `{"type": "ack", "action": "snoozed"|"dismissed"|"declined", "snoozedMinutes": int}`,
   sent only when the wearer explicitly snoozes or dismisses on-watch. No notification ID is
   included — the protocol assumes (like the watch firmware) that only one reminder is active at
   a time, so we match an incoming ack to **the most recently `sent` notification for that

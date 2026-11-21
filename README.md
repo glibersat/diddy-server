@@ -18,7 +18,7 @@ Per-user notification backend for ADHD-friendly watch reminders. Two criteria to
 Delivery follows the companion app's protocol
 (`../companion-android/docs/backend-protocol.md`, mirroring InfiniTime's BLE
 `doc/ReminderService.md`): the backend pushes a `trigger` JSON message over a persistent
-per-user WebSocket at `/ws` (API key in an `X-API-Key` header), and the phone relays a `snoozed`/`dismissed` `ack`
+per-user WebSocket at `/ws` (API key in an `X-API-Key` header), and the phone relays a `snoozed`/`dismissed`/`declined` `ack`
 back once the wearer actually acts on it. There's no delivery guarantee in the protocol itself,
 so unacked triggers are automatically resent (`DIDDY_ACK_TIMEOUT_SECONDS`, capped at
 `DIDDY_MAX_SEND_ATTEMPTS`).

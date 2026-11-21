@@ -64,6 +64,8 @@ class RuleType(str, Enum):
 class AckAction(str, Enum):
     snoozed = "snoozed"
     dismissed = "dismissed"
+    # "Not today": only possible on a reminder sent with a decline label.
+    declined = "declined"
 
 
 class User(Base):
@@ -222,6 +224,9 @@ class Notification(Base):
     kind: Mapped[ReminderKind] = mapped_column(String, default=ReminderKind.generic)
     dismissible: Mapped[bool] = mapped_column(default=True)
     snooze_minutes: Mapped[list[int]] = mapped_column(JSON, default=list)
+    # Button labels for the watch, {"done", "later", "decline"}, each optional - see
+    # InfiniTime/doc/ReminderService.md. NULL keeps the watch's own DONE and "N min".
+    labels: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
 
     status: Mapped[NotificationStatus] = mapped_column(String, default=NotificationStatus.pending)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
