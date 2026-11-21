@@ -26,6 +26,7 @@ def enqueue_notification(
     kind: ReminderKind = ReminderKind.generic,
     dismissible: bool = True,
     snooze_minutes: list[int] | None = None,
+    labels: dict[str, str] | None = None,
     expires_at: datetime | None = None,
     scheduled_for: datetime | None = None,
 ) -> Notification | None:
@@ -54,6 +55,7 @@ def enqueue_notification(
         kind=kind,
         dismissible=dismissible,
         snooze_minutes=snooze_minutes or [],
+        labels=labels or None,
     )
     notification.expires_at = expires_at or due + timedelta(hours=settings.notification_ttl_hours)
     db.add(notification)

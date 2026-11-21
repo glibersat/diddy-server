@@ -20,7 +20,7 @@ def _dispatch_payload(notification: Notification) -> dict:
     dismiss/snooze/kind); `reminder` uses the custom Reminder/Trigger characteristic."""
     if notification.channel == NotificationChannel.alert:
         return {"type": "alert", "message": notification.body}
-    return {
+    payload = {
         "type": "trigger",
         "kind": notification.kind,
         "easyDismiss": notification.dismissible,
@@ -28,6 +28,9 @@ def _dispatch_payload(notification: Notification) -> dict:
         "title": notification.title,
         "body": notification.body,
     }
+    if notification.labels:
+        payload["labels"] = notification.labels
+    return payload
 
 
 # Serializes dispatch per user, so the scheduler's `_dispatch_tick` and a `watch_ready`-driven
